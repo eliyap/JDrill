@@ -49,6 +49,30 @@ def strip_furigana(s: str) -> str:
     return FURIGANA_RE.sub(r"\1", s)
 
 
+def extract_ruby_segments(s: str):
+    """Walk a furigana-annotated string and return a list of
+    [text, reading_or_None] segments. Concatenating the text parts
+    reconstructs the stripped form.
+
+    Example:  食(た)べ物(もの)
+              → [["食","た"], ["べ", None], ["物","もの"]]
+    """
+    segments = []
+    i = 0
+    for m in FURIGANA_RE.finditer(s):
+        if m.start() > i:
+            plain = s[i:m.start()]
+            if plain:
+                segments.append([plain, None])
+        segments.append([m.group(1), m.group(2)])
+        i = m.end()
+    if i < len(s):
+        tail = s[i:]
+        if tail:
+            segments.append([tail, None])
+    return segments
+
+
 def clean_markdown(s: str) -> str:
     s = MARKDOWN_LINK_RE.sub(r"\1", s)
     s = LINK_RE.sub(r"\1", s)
@@ -116,6 +140,13 @@ def parse_vocab_card(card: dict):
     notes = re.sub(r"\s+", " ", notes).strip()
     if notes:
         entry["notes"] = notes
+    # Carry the furigana-annotated form along so the runtime can wrap kanji
+    # in <ruby> tags when the model's reference answer contains this word.
+    # Only attach when the source actually had a reading — pure-kana entries
+    # would just bloat vocab.json and never trigger a ruby render anyway.
+    segments = extract_ruby_segments(jp_raw.strip())
+    if any(reading for _, reading in segments):
+        entry["ruby"] = segments
     return entry
 
 

@@ -19,10 +19,14 @@ import {
   gradeAnswer,
   stats as openAiStats,
 } from "./openai.js";
-import { shouldRefill, freshOrGradingCount } from "./runtime.js";
+import { shouldRefill, freshOrGradingCount, buildRubyAnnotator, renderRuby } from "./runtime.js";
 
 const VOCAB = JSON.parse(document.getElementById("vocab").textContent || "[]");
 const GRAMMAR = JSON.parse(document.getElementById("grammar").textContent || "[]");
+
+// One-shot lookup table for furigana rendering. Built at module load
+// because vocab is immutable for the session.
+const RUBY = buildRubyAnnotator(VOCAB);
 
 // -- Reducer ------------------------------------------------------------------
 
@@ -523,7 +527,7 @@ function Reveal({ card }) {
       <div class="row">
         <span class="pill">${card.drill.target_grammar_label || ""}</span>
       </div>
-      <div class="ref-jp">${card.drill.reference_jp}</div>
+      <div class="ref-jp"><${RubyText} text=${card.drill.reference_jp} /></div>
       ${card.drill.notes && html`<div class="muted">${card.drill.notes}</div>`}
       <div class="judges">
         ${card.verdicts.map((v, i) => html`
@@ -534,6 +538,22 @@ function Reveal({ card }) {
       </div>
     </div>
   `;
+}
+
+/**
+ * Render a Japanese string with furigana annotations on any vocab word
+ * the user has studied. Words without ruby data render as plain text.
+ */
+function RubyText({ text }) {
+  const tokens = renderRuby(text || "", RUBY.map, RUBY.keys);
+  return html`<span>${tokens.map((tok, i) => {
+    if (tok.kind === "plain") return tok.text;
+    return html`<span key=${i}>${tok.segments.map(([t, r], j) =>
+      r
+        ? html`<ruby key=${j}>${t}<rt>${r}</rt></ruby>`
+        : t
+    )}</span>`;
+  })}</span>`;
 }
 
 function Ghost() {
@@ -652,7 +672,7 @@ function Stats({ counts, db }) {
             <div class="drill-entry">
               <div class="meta">${r.verdict === "pass" ? "✓ " : "✗ "}${r.target_grammar_label || ""} · ${new Date(r.ts).toLocaleString()}</div>
               <div>EN: ${r.prompt_en}</div>
-              <div>REF: ${r.reference_jp}</div>
+              <div>REF: <${RubyText} text=${r.reference_jp} /></div>
               <div>YOU: ${r.user_answer}</div>
             </div>
           `)}
