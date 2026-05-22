@@ -66,14 +66,76 @@
   .card[data-state="grading"] { border-left: 3px solid var(--accent); opacity: 0.85; }
   .card[data-state="graded-pass"] { border-left: 3px solid var(--pass); }
   .card[data-state="graded-fail"] { border-left: 3px solid var(--fail); }
-  .card-state-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .card-state-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 6px; }
   .card-prompt { font-size: 17px; margin: 4px 0 10px; }
   .card-actions { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  .card-judges-mini { margin-top: 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   .card-reveal { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
   .judges { margin-top: 6px; font-size: 13px; color: var(--muted); }
   .judges .j { margin: 2px 0; }
   .drill-entry { border-top: 1px dashed var(--border); padding: 8px 0; font-size: 13px; }
   .drill-entry .meta { color: var(--muted); }
+
+  /* Per-judge mini indicator */
+  .judge-pill {
+    font-size: 12px;
+    line-height: 1;
+    padding: 4px 8px 4px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .judge-pill::before {
+    content: "";
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  .judge-pill.pending {
+    color: #b8860b;
+    border-color: rgba(218, 165, 32, 0.4);
+    background: rgba(255, 215, 0, 0.08);
+  }
+  .judge-pill.pending::before {
+    background: #f0b400;
+    animation: judge-pulse 1.1s ease-in-out infinite;
+  }
+  .judge-pill.pass { color: var(--pass); border-color: rgba(42, 122, 58, 0.5); background: rgba(42, 122, 58, 0.08); }
+  .judge-pill.pass::before { background: var(--pass); }
+  .judge-pill.fail { color: var(--fail); border-color: rgba(162, 58, 58, 0.5); background: rgba(162, 58, 58, 0.08); }
+  .judge-pill.fail::before { background: var(--fail); }
+  @keyframes judge-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.45; transform: scale(0.85); }
+  }
+
+  /* Ghost / placeholder card while generation+approval is in flight */
+  .card.ghost {
+    border-left: 3px solid var(--muted);
+    opacity: 0.85;
+    pointer-events: none;
+  }
+  .ghost-skel {
+    background: linear-gradient(90deg,
+      var(--bg) 0%,
+      var(--border) 50%,
+      var(--bg) 100%);
+    background-size: 200% 100%;
+    animation: ghost-shimmer 1.6s linear infinite;
+    border-radius: 6px;
+    margin: 8px 0;
+  }
+  .ghost-line { height: 16px; width: 70%; }
+  .ghost-line.short { width: 45%; }
+  .ghost-block { height: 56px; width: 100%; }
+  @keyframes ghost-shimmer {
+    0%   { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+  }
 </style>
 </head>
 <body>
@@ -2729,7 +2791,7 @@ PRAGMA user_version = 1;
       required: ["verdict", "reason"]
     }
   };
-  async function callOpenAI(userPayload, schema) {
+  async function callOpenAIOnce(userPayload, schema) {
     if (!hasApiKey()) throw new Error("no api key");
     const body = {
       model: getSetting("model", "gpt-5"),
@@ -2756,12 +2818,34 @@ PRAGMA user_version = 1;
         detail = await resp.text();
       } catch (e) {
       }
-      throw new Error("openai " + resp.status + ": " + detail.slice(0, 300));
+      const err = new Error("openai " + resp.status + ": " + detail.slice(0, 300));
+      err.status = resp.status;
+      throw err;
     }
     const data = await resp.json();
     const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
     if (!text) throw new Error("openai: empty response");
     return JSON.parse(text);
+  }
+  function isRetriable(err) {
+    if (!err) return false;
+    if (typeof err.status === "number") {
+      return err.status === 408 || err.status === 429 || err.status >= 500;
+    }
+    return err instanceof TypeError;
+  }
+  async function callOpenAI(userPayload, schema) {
+    const maxAttempts = 4;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        return await callOpenAIOnce(userPayload, schema);
+      } catch (e) {
+        if (attempt === maxAttempts - 1 || !isRetriable(e)) throw e;
+        const delay = 800 * Math.pow(2, attempt) + Math.random() * 200;
+        console.warn(`[openai] ${e.message} \u2192 retry in ${Math.round(delay)}ms`);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
   }
   function sample(arr, n) {
     const k = Math.min(n, arr.length);
@@ -2789,18 +2873,20 @@ PRAGMA user_version = 1;
     };
     const out = await callOpenAI(payload, GENERATE_SCHEMA);
     if (out.error) {
+      console.info(`[generator] ${out.error}: ${out.reason || ""}`);
       const err = new Error("generator-skip: " + out.error);
       err.skip = true;
       throw err;
     }
     if (!gCands.some((g) => g.id === out.target_grammar_id)) {
+      console.info("[generator] picked unknown grammar id; discarding");
       const err = new Error("generator picked unknown grammar id");
       err.skip = true;
       throw err;
     }
     return out;
   }
-  async function approveDrill(drill) {
+  async function approveDrill(drill, onJudge) {
     const payload = {
       task: "approve",
       drill: {
@@ -2811,11 +2897,38 @@ PRAGMA user_version = 1;
         notes: drill.notes
       }
     };
-    const calls = [0, 1, 2].map(() => callOpenAI(payload, JUDGE_SCHEMA));
-    const verdicts = await Promise.all(calls);
-    return { passed: verdicts.every((v) => v.verdict === "yes"), verdicts };
+    const verdicts = await runJudgePanel(payload, onJudge);
+    const passed = verdicts.every((v) => v.verdict === "yes");
+    if (!passed) {
+      const nos = verdicts.filter((v) => v.verdict !== "yes").length;
+      console.info(`[approval] rejected (${nos}/3 judge${nos === 1 ? "" : "s"} no): ${drill.prompt_en}`);
+    }
+    return { passed, verdicts };
   }
-  async function gradeAnswer(drill, userAnswer) {
+  function runJudgePanel(payload, onJudge) {
+    const promises = [0, 1, 2].map(
+      (i) => callOpenAI(payload, JUDGE_SCHEMA).then((v) => {
+        if (onJudge) {
+          try {
+            onJudge(i, v, null);
+          } catch (_) {
+          }
+        }
+        return v;
+      }).catch((e) => {
+        if (onJudge) {
+          try {
+            onJudge(i, null, e);
+          } catch (_) {
+          }
+        }
+        console.warn(`[judge ${i + 1}] failed:`, e && e.message ? e.message : e);
+        return { verdict: "no", reason: "judge error: " + (e && e.message ? e.message : String(e)) };
+      })
+    );
+    return Promise.all(promises);
+  }
+  async function gradeAnswer(drill, userAnswer, onJudge) {
     const payload = {
       task: "grade",
       prompt_en: drill.prompt_en,
@@ -2823,8 +2936,7 @@ PRAGMA user_version = 1;
       target_grammar_label: drill.target_grammar_label,
       user_answer: userAnswer
     };
-    const calls = [0, 1, 2].map(() => callOpenAI(payload, JUDGE_SCHEMA));
-    const verdicts = await Promise.all(calls);
+    const verdicts = await runJudgePanel(payload, onJudge);
     return { passed: verdicts.every((v) => v.verdict === "yes"), verdicts };
   }
 
@@ -3105,6 +3217,33 @@ PRAGMA user_version = 1;
       });
       return el;
     }
+    _renderJudgePanel() {
+      const actions = this.el.querySelector(".card-actions");
+      if (!actions) return;
+      actions.innerHTML = "";
+      actions.className = "card-judges-mini";
+      for (let i = 0; i < 3; i++) {
+        const pill = document.createElement("span");
+        pill.className = "judge-pill pending";
+        pill.dataset.judge = String(i);
+        pill.textContent = `judge ${i + 1}`;
+        actions.appendChild(pill);
+      }
+      this._judgesEl = actions;
+    }
+    _updateJudgeIndicator(i, verdict, err) {
+      if (!this._judgesEl) return;
+      const pill = this._judgesEl.querySelector(`[data-judge="${i}"]`);
+      if (!pill) return;
+      pill.classList.remove("pending");
+      if (verdict && verdict.verdict === "yes") {
+        pill.classList.add("pass");
+        pill.textContent = `judge ${i + 1} \u2713`;
+      } else {
+        pill.classList.add("fail");
+        pill.textContent = `judge ${i + 1} \u2717`;
+      }
+    }
     _setState(state) {
       this.state = state;
       this.el.dataset.state = state;
@@ -3136,10 +3275,12 @@ PRAGMA user_version = 1;
       this._gradeBtn.disabled = true;
       this._skipBtn.disabled = true;
       this._setState("grading");
+      this._renderJudgePanel();
       updateQueueStatus();
       refillQueue();
       try {
-        const { passed, verdicts } = await gradeAnswer(this.drill, this.answer);
+        const onJudge = (i, v2, err) => this._updateJudgeIndicator(i, v2, err);
+        const { passed, verdicts } = await gradeAnswer(this.drill, this.answer, onJudge);
         this.passed = passed;
         this.verdicts = verdicts;
         persistHistory(this.drill, this.answer, passed, verdicts);
@@ -3211,8 +3352,7 @@ PRAGMA user_version = 1;
     if (!el) return;
     const fresh = cards.reduce((n, c) => n + (c.state === "fresh" ? 1 : 0), 0);
     const grading = cards.reduce((n, c) => n + (c.state === "grading" ? 1 : 0), 0);
-    const tail = grading || inflight ? " \xB7 " + grading + " grading \xB7 " + inflight + " generating" : "";
-    el.textContent = fresh + " ready" + tail;
+    el.textContent = fresh + " ready" + (grading ? " \xB7 " + grading + " grading" : "");
   }
   function updateEmptyHint() {
     const hint = $("empty-hint");
@@ -3222,15 +3362,26 @@ PRAGMA user_version = 1;
       hint.textContent = "Enter your API key above to begin.";
       return;
     }
-    hint.hidden = cards.length > 0;
-    if (!hint.hidden) {
-      hint.textContent = "Generating first drill\u2026 (flex tier ~90s)";
-    }
+    hint.hidden = true;
   }
-  function appendCard(drill) {
+  function createGhost() {
+    const el = document.createElement("article");
+    el.className = "card ghost";
+    el.innerHTML = `
+    <div class="card-state-row">
+      <span class="pill grading">generating\u2026</span>
+    </div>
+    <div class="ghost-skel ghost-line"></div>
+    <div class="ghost-skel ghost-block"></div>
+    <div class="ghost-skel ghost-line short"></div>
+  `;
+    $("cards-stack").appendChild(el);
+    return el;
+  }
+  function replaceGhostWithCard(ghost, drill) {
     const card = new Card(drill);
     cards.push(card);
-    $("cards-stack").appendChild(card.el);
+    ghost.replaceWith(card.el);
     updateQueueStatus();
     updateEmptyHint();
     if (document.activeElement === document.body) {
@@ -3243,14 +3394,19 @@ PRAGMA user_version = 1;
     const target = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
     while (freshOrGradingCount() + inflight < target) {
       inflight++;
+      const ghost = createGhost();
       updateQueueStatus();
+      updateEmptyHint();
       generateAndApprove().then((drill) => {
-        if (drill) appendCard(drill);
+        if (drill) replaceGhostWithCard(ghost, drill);
+        else ghost.remove();
       }).catch((err) => {
-        if (!err.skip) console.error("prefetch error:", err);
+        if (!err.skip) console.error("[prefetch]", err);
+        ghost.remove();
       }).finally(() => {
         inflight--;
         updateQueueStatus();
+        updateEmptyHint();
         const t2 = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
         if (hasApiKey() && freshOrGradingCount() + inflight < t2) {
           setTimeout(refillQueue, 50);

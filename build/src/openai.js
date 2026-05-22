@@ -113,7 +113,7 @@ const JUDGE_SCHEMA = {
   },
 };
 
-async function callOpenAI(userPayload, schema) {
+async function callOpenAIOnce(userPayload, schema) {
   if (!hasApiKey()) throw new Error("no api key");
   const body = {
     model: getSetting("model", "gpt-5"),
@@ -137,12 +137,38 @@ async function callOpenAI(userPayload, schema) {
   if (!resp.ok) {
     let detail = "";
     try { detail = await resp.text(); } catch (e) {}
-    throw new Error("openai " + resp.status + ": " + detail.slice(0, 300));
+    const err = new Error("openai " + resp.status + ": " + detail.slice(0, 300));
+    err.status = resp.status;
+    throw err;
   }
   const data = await resp.json();
   const text = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
   if (!text) throw new Error("openai: empty response");
   return JSON.parse(text);
+}
+
+function isRetriable(err) {
+  if (!err) return false;
+  // HTTP status: server errors and rate-limit / timeout are worth retrying.
+  if (typeof err.status === "number") {
+    return err.status === 408 || err.status === 429 || err.status >= 500;
+  }
+  // fetch network failures surface as TypeError on most browsers.
+  return err instanceof TypeError;
+}
+
+async function callOpenAI(userPayload, schema) {
+  const maxAttempts = 4;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await callOpenAIOnce(userPayload, schema);
+    } catch (e) {
+      if (attempt === maxAttempts - 1 || !isRetriable(e)) throw e;
+      const delay = 800 * Math.pow(2, attempt) + Math.random() * 200;
+      console.warn(`[openai] ${e.message} → retry in ${Math.round(delay)}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
 }
 
 function sample(arr, n) {
@@ -172,11 +198,13 @@ export async function generateDrill() {
   };
   const out = await callOpenAI(payload, GENERATE_SCHEMA);
   if (out.error) {
+    console.info(`[generator] ${out.error}: ${out.reason || ""}`);
     const err = new Error("generator-skip: " + out.error);
     err.skip = true;
     throw err;
   }
   if (!gCands.some(g => g.id === out.target_grammar_id)) {
+    console.info("[generator] picked unknown grammar id; discarding");
     const err = new Error("generator picked unknown grammar id");
     err.skip = true;
     throw err;
@@ -184,7 +212,7 @@ export async function generateDrill() {
   return out;
 }
 
-export async function approveDrill(drill) {
+export async function approveDrill(drill, onJudge) {
   const payload = {
     task: "approve",
     drill: {
@@ -195,12 +223,34 @@ export async function approveDrill(drill) {
       notes: drill.notes,
     },
   };
-  const calls = [0, 1, 2].map(() => callOpenAI(payload, JUDGE_SCHEMA));
-  const verdicts = await Promise.all(calls);
-  return { passed: verdicts.every(v => v.verdict === "yes"), verdicts };
+  const verdicts = await runJudgePanel(payload, onJudge);
+  const passed = verdicts.every(v => v.verdict === "yes");
+  if (!passed) {
+    const nos = verdicts.filter(v => v.verdict !== "yes").length;
+    console.info(`[approval] rejected (${nos}/3 judge${nos === 1 ? "" : "s"} no): ${drill.prompt_en}`);
+  }
+  return { passed, verdicts };
 }
 
-export async function gradeAnswer(drill, userAnswer) {
+function runJudgePanel(payload, onJudge) {
+  const promises = [0, 1, 2].map((i) =>
+    callOpenAI(payload, JUDGE_SCHEMA)
+      .then((v) => {
+        if (onJudge) { try { onJudge(i, v, null); } catch (_) {} }
+        return v;
+      })
+      .catch((e) => {
+        if (onJudge) { try { onJudge(i, null, e); } catch (_) {} }
+        // Treat a permanently-failed judge as a "no" so the overall call
+        // produces a verdict the user can act on. The error is logged.
+        console.warn(`[judge ${i + 1}] failed:`, e && e.message ? e.message : e);
+        return { verdict: "no", reason: "judge error: " + (e && e.message ? e.message : String(e)) };
+      })
+  );
+  return Promise.all(promises);
+}
+
+export async function gradeAnswer(drill, userAnswer, onJudge) {
   const payload = {
     task: "grade",
     prompt_en: drill.prompt_en,
@@ -208,7 +258,6 @@ export async function gradeAnswer(drill, userAnswer) {
     target_grammar_label: drill.target_grammar_label,
     user_answer: userAnswer,
   };
-  const calls = [0, 1, 2].map(() => callOpenAI(payload, JUDGE_SCHEMA));
-  const verdicts = await Promise.all(calls);
+  const verdicts = await runJudgePanel(payload, onJudge);
   return { passed: verdicts.every(v => v.verdict === "yes"), verdicts };
 }

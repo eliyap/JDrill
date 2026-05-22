@@ -322,6 +322,37 @@ class Card {
     return el;
   }
 
+  _renderJudgePanel() {
+    // Replace the actions row with three pending judge pills. They'll be
+    // mutated in place as judge promises resolve.
+    const actions = this.el.querySelector(".card-actions");
+    if (!actions) return;
+    actions.innerHTML = "";
+    actions.className = "card-judges-mini";
+    for (let i = 0; i < 3; i++) {
+      const pill = document.createElement("span");
+      pill.className = "judge-pill pending";
+      pill.dataset.judge = String(i);
+      pill.textContent = `judge ${i + 1}`;
+      actions.appendChild(pill);
+    }
+    this._judgesEl = actions;
+  }
+
+  _updateJudgeIndicator(i, verdict, err) {
+    if (!this._judgesEl) return;
+    const pill = this._judgesEl.querySelector(`[data-judge="${i}"]`);
+    if (!pill) return;
+    pill.classList.remove("pending");
+    if (verdict && verdict.verdict === "yes") {
+      pill.classList.add("pass");
+      pill.textContent = `judge ${i + 1} ✓`;
+    } else {
+      pill.classList.add("fail");
+      pill.textContent = `judge ${i + 1} ✗`;
+    }
+  }
+
   _setState(state) {
     this.state = state;
     this.el.dataset.state = state;
@@ -351,11 +382,13 @@ class Card {
     this._gradeBtn.disabled = true;
     this._skipBtn.disabled = true;
     this._setState("grading");
+    this._renderJudgePanel();
     updateQueueStatus();
     refillQueue();
 
     try {
-      const { passed, verdicts } = await gradeAnswer(this.drill, this.answer);
+      const onJudge = (i, v, err) => this._updateJudgeIndicator(i, v, err);
+      const { passed, verdicts } = await gradeAnswer(this.drill, this.answer, onJudge);
       this.passed = passed;
       this.verdicts = verdicts;
       persistHistory(this.drill, this.answer, passed, verdicts);
@@ -437,10 +470,8 @@ function updateQueueStatus() {
   if (!el) return;
   const fresh = cards.reduce((n, c) => n + (c.state === "fresh" ? 1 : 0), 0);
   const grading = cards.reduce((n, c) => n + (c.state === "grading" ? 1 : 0), 0);
-  const tail = grading || inflight
-    ? " · " + grading + " grading · " + inflight + " generating"
-    : "";
-  el.textContent = fresh + " ready" + tail;
+  // Generations in flight are shown visually as ghost cards, not text.
+  el.textContent = fresh + " ready" + (grading ? " · " + grading + " grading" : "");
 }
 
 function updateEmptyHint() {
@@ -451,19 +482,35 @@ function updateEmptyHint() {
     hint.textContent = "Enter your API key above to begin.";
     return;
   }
-  hint.hidden = cards.length > 0;
-  if (!hint.hidden) {
-    hint.textContent = "Generating first drill… (flex tier ~90s)";
-  }
+  // Ghosts are visible whenever generations are in flight, so the hint is
+  // only useful in the brief window before the first ghost is appended.
+  hint.hidden = true;
 }
 
-function appendCard(drill) {
+function createGhost() {
+  // Apple-widget shimmer skeleton. Inserted as a real <article> at the
+  // bottom of the stack while generation+approval runs; replaced in-place
+  // with a Card on success, removed on failure.
+  const el = document.createElement("article");
+  el.className = "card ghost";
+  el.innerHTML = `
+    <div class="card-state-row">
+      <span class="pill grading">generating…</span>
+    </div>
+    <div class="ghost-skel ghost-line"></div>
+    <div class="ghost-skel ghost-block"></div>
+    <div class="ghost-skel ghost-line short"></div>
+  `;
+  $("cards-stack").appendChild(el);
+  return el;
+}
+
+function replaceGhostWithCard(ghost, drill) {
   const card = new Card(drill);
   cards.push(card);
-  $("cards-stack").appendChild(card.el);
+  ghost.replaceWith(card.el);
   updateQueueStatus();
   updateEmptyHint();
-  // Autofocus the topmost fresh card's textarea iff nothing's focused yet.
   if (document.activeElement === document.body) {
     const firstFresh = cards.find(c => c.state === "fresh");
     if (firstFresh) firstFresh._answerEl.focus();
@@ -475,13 +522,22 @@ function refillQueue() {
   const target = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
   while (freshOrGradingCount() + inflight < target) {
     inflight++;
+    const ghost = createGhost();
     updateQueueStatus();
+    updateEmptyHint();
     generateAndApprove()
-      .then((drill) => { if (drill) appendCard(drill); })
-      .catch((err) => { if (!err.skip) console.error("prefetch error:", err); })
+      .then((drill) => {
+        if (drill) replaceGhostWithCard(ghost, drill);
+        else ghost.remove();
+      })
+      .catch((err) => {
+        if (!err.skip) console.error("[prefetch]", err);
+        ghost.remove();
+      })
       .finally(() => {
         inflight--;
         updateQueueStatus();
+        updateEmptyHint();
         const t2 = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
         if (hasApiKey() && freshOrGradingCount() + inflight < t2) {
           setTimeout(refillQueue, 50);
@@ -493,7 +549,7 @@ function refillQueue() {
 async function generateAndApprove() {
   const drill = await generateDrill();
   const { passed, verdicts } = await approveDrill(drill);
-  if (!passed) return null;
+  if (!passed) return null;  // [approval] log emitted inside approveDrill
   drill._approval = verdicts;
   return drill;
 }
