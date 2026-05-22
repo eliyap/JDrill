@@ -184,6 +184,9 @@ def main() -> int:
                     help="Path to Mochi export (default: %(default)s)")
     ap.add_argument("--out-dir", default=str(HERE),
                     help="Where to write vocab.json/grammar.json (default: alongside this script)")
+    ap.add_argument("--exclude-deck", action="append", default=[],
+                    help="Deck name to exclude from vocab pool (repeatable). "
+                         "'Grammar Practice' is always excluded from vocab sampling.")
     args = ap.parse_args()
 
     export = Path(args.mochi)
@@ -196,24 +199,40 @@ def main() -> int:
     decks = data["~:decks"]
 
     grammar_deck = find_deck(decks, "Grammar Practice")
-    vocab_deck = find_deck(decks, "Vocab")
     if not grammar_deck:
         raise SystemExit(f"No 'Grammar Practice' deck found in {export}")
-    if not vocab_deck:
-        raise SystemExit(f"No 'Vocab' deck found in {export}")
-
     print(f"Grammar Practice: {len(grammar_deck['~:cards']['~#list'])} cards")
-    print(f"Vocab:            {len(vocab_deck['~:cards']['~#list'])} cards")
 
     grammar_entries = [e for c in grammar_deck["~:cards"]["~#list"]
                        if (e := parse_grammar_card(c)) is not None]
-    vocab_entries = [e for c in vocab_deck["~:cards"]["~#list"]
-                     if (e := parse_vocab_card(c)) is not None]
+
+    # Pull vocab from EVERY non-grammar deck. parse_vocab_card returns None
+    # for cards that don't have the `# English / --- / # Japanese` shape, so
+    # decks like "EE451 MT2" (CS notes) naturally produce zero entries and
+    # cost nothing to scan.
+    excluded = set(args.exclude_deck) | {"Grammar Practice"}
+    vocab_entries = []
+    per_deck = []
+    for d in decks:
+        name = d.get("~:name", "")
+        if name in excluded:
+            continue
+        cards = d.get("~:cards", {}).get("~#list", [])
+        parsed = [e for c in cards if (e := parse_vocab_card(c)) is not None]
+        if parsed:
+            per_deck.append((len(parsed), len(cards), name))
+            vocab_entries.extend(parsed)
+
+    per_deck.sort(reverse=True)
+    if per_deck:
+        print("Vocab decks scanned (parsed/total):")
+        for p, c, n in per_deck:
+            print(f"  {p:4d}/{c:4d}  {n}")
 
     grammar_entries = dedup(grammar_entries)
     vocab_entries = dedup(vocab_entries)
 
-    print(f"Parsed: {len(grammar_entries)} grammar entries, {len(vocab_entries)} vocab entries")
+    print(f"\nParsed: {len(grammar_entries)} grammar entries, {len(vocab_entries)} vocab entries (after dedup)")
 
     (out_dir / "grammar.json").write_text(
         json.dumps(grammar_entries, ensure_ascii=False, separators=(",", ":"))

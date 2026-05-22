@@ -292,6 +292,11 @@ function hydrateControlsFromDb() {
   // Queue target
   $("queue-target").value = db.getSetting("queue_target", "5");
 
+  // Sampling
+  $("grammar-sample-size").value = db.getSetting("grammar_sample_size", "2");
+  $("vocab-sample-size").value = db.getSetting("vocab_sample_size", "10");
+  $("temperature").value = db.getSetting("temperature", "1");
+
   // Instructions
   $("instructions").value = db.getSetting("instructions", "");
 
@@ -338,6 +343,28 @@ function wireSettings() {
     db.setSetting("queue_target", String(v));
     if (hasApiKey()) refillQueue();
   });
+
+  function wireIntInput(id, key, defVal, lo, hi) {
+    $(id).addEventListener("change", function () {
+      if (!db) return;
+      const v = Math.max(lo, Math.min(hi, parseInt(this.value, 10) || defVal));
+      this.value = String(v);
+      db.setSetting(key, String(v));
+    });
+  }
+  function wireFloatInput(id, key, defVal, lo, hi) {
+    $(id).addEventListener("change", function () {
+      if (!db) return;
+      let v = parseFloat(this.value);
+      if (!isFinite(v)) v = defVal;
+      v = Math.max(lo, Math.min(hi, v));
+      this.value = String(v);
+      db.setSetting(key, String(v));
+    });
+  }
+  wireIntInput("grammar-sample-size", "grammar_sample_size", 2, 1, 10);
+  wireIntInput("vocab-sample-size", "vocab_sample_size", 10, 1, 30);
+  wireFloatInput("temperature", "temperature", 1, 0, 2);
 
   const keyEl = $("api-key");
   keyEl.addEventListener("blur", function () {

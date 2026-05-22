@@ -273,6 +273,29 @@
   </section>
 
   <section>
+    <h2>Sampling</h2>
+    <p class="muted" style="margin: 0 0 8px;">How the runtime chooses what to put in front of the model on each generation call.</p>
+
+    <div class="control-row">
+      <span class="label">Grammar / call</span>
+      <input id="grammar-sample-size" type="number" min="1" max="10" step="1">
+      <span class="muted">candidates offered (lower = focused, higher = wider).</span>
+    </div>
+
+    <div class="control-row">
+      <span class="label">Vocab / call</span>
+      <input id="vocab-sample-size" type="number" min="1" max="30" step="1">
+      <span class="muted">candidates offered.</span>
+    </div>
+
+    <div class="control-row">
+      <span class="label">Temperature</span>
+      <input id="temperature" type="number" min="0" max="2" step="0.05">
+      <span class="muted">0 = deterministic, 1 = default, 2 = max randomness.</span>
+    </div>
+  </section>
+
+  <section>
     <h2>Queue depth</h2>
     <div class="row">
       <span class="muted">When auto-generate is on, keep</span>
