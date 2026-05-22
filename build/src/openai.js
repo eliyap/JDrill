@@ -10,6 +10,8 @@
 //     so we forgo caching in exchange for 30x smaller per-call payload.
 // Candidates are passed per-call in the user message instead.
 
+import { sample } from "./runtime.js";
+
 let VOCAB = [];
 let GRAMMAR_ALL = [];
 let GRAMMAR = [];
@@ -17,13 +19,17 @@ let SYSTEM_PROMPT = "";
 
 let apiKey = null;
 let getSetting = () => "";  // injected by main
+let fetchFn = (typeof globalThis !== "undefined" && globalThis.fetch)
+  ? globalThis.fetch.bind(globalThis)
+  : null;
 
-export function configure({ vocab, grammar, getSettingFn }) {
+export function configure({ vocab, grammar, getSettingFn, fetch }) {
   VOCAB = vocab;
   GRAMMAR_ALL = grammar;
   GRAMMAR = grammar.filter(g => !((g.tags || []).includes("unverified")));
   SYSTEM_PROMPT = buildSystemPrompt();
   if (getSettingFn) getSetting = getSettingFn;
+  if (fetch) fetchFn = fetch;
 }
 
 export function setApiKey(k) { apiKey = k || null; }
@@ -124,7 +130,8 @@ async function callOpenAIOnce(userPayload, schema) {
     response_format: { type: "json_schema", json_schema: schema },
     seed: Math.floor(Math.random() * 1e9),
   };
-  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+  if (!fetchFn) throw new Error("no fetch transport configured");
+  const resp = await fetchFn("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -145,7 +152,7 @@ async function callOpenAIOnce(userPayload, schema) {
   return JSON.parse(text);
 }
 
-function isRetriable(err) {
+export function isRetriable(err) {
   if (!err) return false;
   // HTTP status: server errors and rate-limit / timeout are worth retrying.
   if (typeof err.status === "number") {
@@ -167,19 +174,6 @@ async function callOpenAI(userPayload, schema) {
       await new Promise(r => setTimeout(r, delay));
     }
   }
-}
-
-function sample(arr, n) {
-  const k = Math.min(n, arr.length);
-  const idx = new Set();
-  const out = [];
-  while (out.length < k) {
-    const i = Math.floor(Math.random() * arr.length);
-    if (idx.has(i)) continue;
-    idx.add(i);
-    out.push(arr[i]);
-  }
-  return out;
 }
 
 export async function generateDrill() {

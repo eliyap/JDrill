@@ -87,22 +87,45 @@ Output: ~1 MB self-contained HTML.
 
 ```
 build/
-  package.json         # sql.js + esbuild dev-deps
+  package.json         # sql.js + esbuild + preact + htm
   convert.py           # Mochi → vocab.json/grammar.json
-  build.py             # convert → bundle → stamp template → write index.html
+  build.py             # convert → test → bundle → stamp template → write index.html
   src/
-    template.html      # outer page shell + UI sections + {{markers}}
-    main.js            # boot, file-picker UI, drill cycle, history rendering
+    template.html      # outer page shell + {{markers}}
+    main.js            # preact App + components, boot, drill cycle
+    runtime.js         # pure queue logic (shouldRefill, sample) — testable
     db.js              # sql.js init, schema migrations, settings/history, autosave
     storage.js         # FileSystemFileHandle + IndexedDB persistence
-    openai.js          # SYSTEM_PROMPT, schemas, callOpenAI, generate/approve/grade
+    openai.js          # prompts, schemas, callOpenAI w/ retry, generate/approve/grade
     wasm-binary.js     # imports sql-wasm.wasm as base64 (esbuild loader)
+    runtime.test.js    # tests for runtime.js (incl. the prefill regression)
+    openai.test.js     # tests for openai.js using a mock fetch transport
   dist/                # esbuild output (gitignored)
   node_modules/        # (gitignored)
   vocab.json           # build artifact (gitignored)
   grammar.json         # build artifact (gitignored)
-index.html          # final shipped artifact
+index.html             # final shipped artifact
 ```
+
+## Tests
+
+```sh
+cd build && npm test
+```
+
+The suite runs in Node's built-in `node --test` harness, no framework needed.
+`build.py` invokes it before bundling — a red bar blocks the build.
+
+- `runtime.test.js`: pure-logic tests for the queue invariants. Includes a
+  named regression test for the grading→graded transition bug that shipped
+  in e6daa5b and was fixed in e4bea21.
+- `openai.test.js`: integration tests for `generateDrill` / `approveDrill` /
+  `gradeAnswer` against a stub fetch transport. No real OpenAI calls — runs
+  for free.
+
+To inject a stub transport, `openai.configure()` accepts a `fetch` option.
+The live app passes `globalThis.fetch`; tests pass a function that returns
+canned JSON-schema-shaped responses.
 
 ## Drill lifecycle
 

@@ -2,7 +2,11 @@
   "name": "n4-drill-build",
   "version": "0.0.0",
   "private": true,
-  "description": "Build pipeline for the inlined n4-drill.html. Run `python3 build.py` from this directory.",
+  "type": "module",
+  "description": "Build pipeline for the inlined index.html. Run `python3 build.py` from this directory.",
+  "scripts": {
+    "test": "node --test src/runtime.test.js src/openai.test.js"
+  },
   "dependencies": {
     "htm": "^3.1.1",
     "preact": "^10.25.4",

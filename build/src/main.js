@@ -19,6 +19,7 @@ import {
   gradeAnswer,
   stats as openAiStats,
 } from "./openai.js";
+import { shouldRefill, freshOrGradingCount } from "./runtime.js";
 
 const VOCAB = JSON.parse(document.getElementById("vocab").textContent || "[]");
 const GRAMMAR = JSON.parse(document.getElementById("grammar").textContent || "[]");
@@ -104,18 +105,19 @@ function App() {
   }
 
   // Refill effect: maintain queue_target fresh+grading cards while auto-gen is
-  // on. Depend on `cards` (the array reference) — the reducer regenerates it
-  // on every state action, including grading→graded, so this effect re-runs
-  // when slots free up. `cards.length` alone would miss the in-place state
-  // transitions and leave the queue underfilled mid-session.
+  // on. Logic lives in runtime.shouldRefill so it can be unit-tested without
+  // touching the React reconciler. Depend on `cards` (the array reference) —
+  // the reducer regenerates it on every state action, including grading→graded
+  // transitions that free up slots. `cards.length` alone misses those.
   useEffect(() => {
     if (phase !== "ready") return;
-    if (!hasApiKey()) return;
-    if (settings.auto_generate !== "1") return;
-    const target = Math.max(1, parseInt(settings.queue_target || "5", 10));
-    const freshOrGrading = cards.reduce(
-      (n, c) => n + (c.state === "fresh" || c.state === "grading" ? 1 : 0), 0);
-    if (freshOrGrading + inflight < target) kickOffOne();
+    if (shouldRefill({
+      cards,
+      inflight,
+      autoGenerate: settings.auto_generate === "1",
+      queueTarget: parseInt(settings.queue_target || "5", 10),
+      hasKey: hasApiKey(),
+    })) kickOffOne();
   }, [phase, settings.auto_generate, settings.queue_target, cards, inflight]);
 
   // -- Imperative actions --

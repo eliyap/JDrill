@@ -42,6 +42,13 @@ def ensure_npm_install() -> None:
         run(["npm", "install"], cwd=HERE)
 
 
+def run_tests() -> None:
+    """Block the build on test failure. Pure-logic tests are cheap (~80ms);
+    the mock-fetch tests cover generate/approve/grade so we don't burn
+    OpenAI calls for regression coverage."""
+    run(["npm", "test", "--silent"], cwd=HERE)
+
+
 def bundle_js() -> str:
     OUT_BUNDLE.parent.mkdir(parents=True, exist_ok=True)
     run([
@@ -75,6 +82,8 @@ def main() -> int:
                     help="Path to Mochi export .zip (default: %(default)s)")
     ap.add_argument("--skip-convert", action="store_true",
                     help="Skip running convert.py (use existing vocab.json/grammar.json)")
+    ap.add_argument("--skip-tests", action="store_true",
+                    help="Skip running the JS test suite (NOT recommended)")
     args = ap.parse_args()
 
     if not args.skip_convert:
@@ -85,6 +94,8 @@ def main() -> int:
             print(f"note: {convert_py} not yet present — skipping vocab/grammar derivation")
 
     ensure_npm_install()
+    if not args.skip_tests:
+        run_tests()
     bundle = bundle_js()
     template = TEMPLATE.read_text(encoding="utf-8")
     vocab = VOCAB_JSON_PATH.read_text(encoding="utf-8") if VOCAB_JSON_PATH.exists() else "[]"
