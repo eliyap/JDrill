@@ -103,17 +103,20 @@ function App() {
     }
   }
 
-  // -- Refill effect: any time auto_generate changes, API key changes, or
-  // cards/inflight change, see if we need to kick off more generations.
+  // Refill effect: maintain queue_target fresh+grading cards while auto-gen is
+  // on. Depend on `cards` (the array reference) — the reducer regenerates it
+  // on every state action, including grading→graded, so this effect re-runs
+  // when slots free up. `cards.length` alone would miss the in-place state
+  // transitions and leave the queue underfilled mid-session.
   useEffect(() => {
     if (phase !== "ready") return;
     if (!hasApiKey()) return;
     if (settings.auto_generate !== "1") return;
     const target = Math.max(1, parseInt(settings.queue_target || "5", 10));
-    const freshOrGrading = cardsRef.current.reduce((n, c) =>
-      n + (c.state === "fresh" || c.state === "grading" ? 1 : 0), 0);
-    if (freshOrGrading + inflightRef.current < target) kickOffOne();
-  }, [phase, settings.auto_generate, settings.queue_target, cards.length, inflight]);
+    const freshOrGrading = cards.reduce(
+      (n, c) => n + (c.state === "fresh" || c.state === "grading" ? 1 : 0), 0);
+    if (freshOrGrading + inflight < target) kickOffOne();
+  }, [phase, settings.auto_generate, settings.queue_target, cards, inflight]);
 
   // -- Imperative actions --
   async function kickOffOne() {
