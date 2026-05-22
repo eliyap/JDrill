@@ -184,6 +184,33 @@ function App() {
 
   function skipCard(id) { dispatch({ type: "remove", id }); }
 
+  function revealCard(id, typedAnswer) {
+    // "I have no idea" path: record the drill as a fail without calling the
+    // grading panel. Whatever the user did type goes into history so the
+    // entry reflects the actual attempt instead of being blank.
+    const card = cardsRef.current.find(c => c.id === id);
+    if (!card || card.state !== "fresh" || !dbRef.current) return;
+    const verdicts = [0, 1, 2].map(() => ({
+      verdict: "no", reason: "user requested reveal — no LLM call",
+    }));
+    const answer = (typedAnswer || "").trim();
+    dbRef.current.insertHistory({
+      ts: Date.now(),
+      prompt_en: card.drill.prompt_en,
+      reference_jp: card.drill.reference_jp,
+      target_grammar_id: card.drill.target_grammar_id,
+      target_grammar_label: card.drill.target_grammar_label,
+      notes: card.drill.notes,
+      user_answer: answer,
+      verdict: "fail",
+      judges_json: JSON.stringify(verdicts),
+    });
+    dispatch({ type: "update", id, patch: {
+      state: "graded-fail", verdicts, passed: false, answer,
+    }});
+    setCounts(dbRef.current.historyCounts());
+  }
+
   function updateSetting(key, value) {
     if (dbRef.current) dbRef.current.setSetting(key, value);
     setSettings(s => ({ ...s, [key]: value }));
@@ -302,6 +329,7 @@ function App() {
         inflight=${inflight}
         onGrade=${startGrade}
         onSkip=${skipCard}
+        onReveal=${revealCard}
       />`}
       ${tab === "settings" && html`<${SettingsTab}
         settings=${settings}
@@ -373,7 +401,7 @@ function Tabs({ active, onSwitch }) {
 
 // -- Revision tab + cards ----------------------------------------------------
 
-function RevisionTab({ settings, onSetting, onGenerate, cards, inflight, onGrade, onSkip }) {
+function RevisionTab({ settings, onSetting, onGenerate, cards, inflight, onGrade, onSkip, onReveal }) {
   const fresh = cards.reduce((n, c) => n + (c.state === "fresh" ? 1 : 0), 0);
   const grading = cards.reduce((n, c) => n + (c.state === "grading" ? 1 : 0), 0);
   const autoOn = settings.auto_generate === "1";
@@ -414,13 +442,13 @@ function RevisionTab({ settings, onSetting, onGenerate, cards, inflight, onGrade
     </section>
 
     <div id="cards-stack">
-      ${cards.map(c => html`<${Card} key=${c.id} card=${c} onGrade=${onGrade} onSkip=${onSkip} />`)}
+      ${cards.map(c => html`<${Card} key=${c.id} card=${c} onGrade=${onGrade} onSkip=${onSkip} onReveal=${onReveal} />`)}
       ${Array.from({ length: ghostCount }, (_, i) => html`<${Ghost} key=${"ghost-" + i} />`)}
     </div>
   `;
 }
 
-function Card({ card, onGrade, onSkip }) {
+function Card({ card, onGrade, onSkip, onReveal }) {
   // Uncontrolled while fresh — avoids re-rendering on every keystroke and
   // lets event handlers read e.target.value synchronously. When the card
   // transitions out of `fresh`, we re-render with a controlled value (the
@@ -443,6 +471,7 @@ function Card({ card, onGrade, onSkip }) {
       ${ds === "fresh" && html`
         <div class="card-actions">
           <button class="primary" onClick=${submit}>Grade</button>
+          <button onClick=${() => onReveal(card.id, textRef.current?.value || "")} title="I have no idea — mark wrong and reveal">Reveal</button>
           <button onClick=${() => onSkip(card.id)}>Skip</button>
         </div>
       `}

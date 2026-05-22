@@ -243,6 +243,18 @@ function runJudgePanel(payload, onJudge) {
 }
 
 export async function gradeAnswer(drill, userAnswer, onJudge) {
+  // Character-perfect short-circuit: if the user's trimmed answer equals
+  // the reference, there's no point in spending 3 judge calls. We synthesize
+  // a unanimous-yes panel and resolve the UI pills immediately. Saves 3
+  // grading calls per perfect drill.
+  if (userAnswer.trim() === (drill.reference_jp || "").trim()) {
+    const verdicts = [0, 1, 2].map(() => ({
+      verdict: "yes",
+      reason: "character-perfect match — no LLM call",
+    }));
+    if (onJudge) verdicts.forEach((v, i) => onJudge(i, v, null));
+    return { passed: true, verdicts };
+  }
   const payload = {
     task: "grade",
     prompt_en: drill.prompt_en,

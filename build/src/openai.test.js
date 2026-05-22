@@ -200,6 +200,47 @@ test("gradeAnswer: onJudge callback fires for each judge", async () => {
   assert.equal(verdicts.length, 3);
 });
 
+test("gradeAnswer: character-perfect short-circuit skips the API entirely", async () => {
+  const m = setup([]);  // any fetch call here would index out and pass through the mock's default
+  const drill = {
+    prompt_en: "I read a book.",
+    reference_jp: "本を読みます。",
+    target_grammar_id: "g1",
+    target_grammar_label: "polite",
+    notes: "",
+  };
+  const events = [];
+  const { passed, verdicts } = await gradeAnswer(drill, "本を読みます。", (i, v) => {
+    events.push({ i, verdict: v.verdict });
+  });
+  assert.equal(m.calls.length, 0, "no fetch calls should be made for an exact match");
+  assert.equal(passed, true);
+  assert.equal(verdicts.length, 3);
+  assert.ok(verdicts.every(v => v.verdict === "yes"));
+  assert.ok(verdicts.every(v => /character-perfect/.test(v.reason)));
+  assert.equal(events.length, 3, "onJudge should still fire so the UI pills resolve");
+});
+
+test("gradeAnswer: short-circuit ignores leading/trailing whitespace", async () => {
+  const m = setup([]);
+  const drill = { prompt_en: "x", reference_jp: "本を読みます。", target_grammar_id: "g1", target_grammar_label: "x", notes: "" };
+  const { passed } = await gradeAnswer(drill, "   本を読みます。   ");
+  assert.equal(m.calls.length, 0);
+  assert.equal(passed, true);
+});
+
+test("gradeAnswer: a single-char difference falls through to the LLM panel", async () => {
+  // Sanity that the short-circuit doesn't over-match.
+  const m = setup([
+    { verdict: "yes", reason: "ok" },
+    { verdict: "yes", reason: "ok" },
+    { verdict: "yes", reason: "ok" },
+  ]);
+  const drill = { prompt_en: "x", reference_jp: "本を読みます。", target_grammar_id: "g1", target_grammar_label: "x", notes: "" };
+  await gradeAnswer(drill, "本を読みました。");  // tense mismatch
+  assert.equal(m.calls.length, 3, "non-matching answers should still invoke the panel");
+});
+
 test("gradeAnswer: judge transport error becomes a 'no' verdict, not a hang", async () => {
   // Simulate a permanent network failure on every retry by returning 400s
   // (non-retriable) on every call.
