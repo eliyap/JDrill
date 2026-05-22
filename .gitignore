@@ -7,6 +7,10 @@ build/grammar.json
 build/node_modules/
 # package-lock.json is kept — pins toolchain (esbuild / sql.js) for reproducible builds.
 
+# Python bytecode
+__pycache__/
+*.pyc
+
 # macOS
 .DS_Store
 
