@@ -40,6 +40,17 @@ CREATE TABLE IF NOT EXISTS history (
 PRAGMA user_version = 1;
 `;
 
+// v2: persist approved-but-unanswered drills so resuming a session doesn't
+// re-spend tokens regenerating what was already in the user's queue.
+const SCHEMA_V2 = `
+CREATE TABLE IF NOT EXISTS pending_drills (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  drill_json TEXT NOT NULL
+);
+PRAGMA user_version = 2;
+`;
+
 const DEFAULT_SETTINGS = {
   model: "gpt-5.4",
   service_tier: "flex",
@@ -76,6 +87,10 @@ export class DrillDb {
     if (v < 1) {
       this.db.exec(SCHEMA_V1);
       this._seedDefaults();
+      this.dirty = true;
+    }
+    if (v < 2) {
+      this.db.exec(SCHEMA_V2);
       this.dirty = true;
     }
     // Backfill any setting that didn't exist when this DB was created.
@@ -182,6 +197,43 @@ export class DrillDb {
       stmt.free();
     }
     return out;
+  }
+
+  // -- Pending drills (approved, awaiting user answer) -----------------------
+
+  insertPending(drill) {
+    const stmt = this.db.prepare(
+      "INSERT INTO pending_drills (ts, drill_json) VALUES (?, ?)"
+    );
+    try { stmt.run([Date.now(), JSON.stringify(drill)]); }
+    finally { stmt.free(); }
+    const r = this.db.exec("SELECT last_insert_rowid()");
+    const id = r[0] ? r[0].values[0][0] : null;
+    this.markDirty();
+    return id;
+  }
+
+  listPending() {
+    const stmt = this.db.prepare(
+      "SELECT id, ts, drill_json FROM pending_drills ORDER BY id ASC"
+    );
+    const out = [];
+    try {
+      while (stmt.step()) {
+        const r = stmt.getAsObject();
+        try {
+          out.push({ id: r.id, ts: r.ts, drill: JSON.parse(r.drill_json) });
+        } catch (_) { /* skip malformed */ }
+      }
+    } finally { stmt.free(); }
+    return out;
+  }
+
+  deletePending(id) {
+    if (id == null) return;
+    const stmt = this.db.prepare("DELETE FROM pending_drills WHERE id = ?");
+    try { stmt.run([id]); } finally { stmt.free(); }
+    this.markDirty();
   }
 
   historyCounts() {

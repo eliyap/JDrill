@@ -79,6 +79,25 @@ function App() {
   }, []);
 
   // -- DB lifecycle --
+  function hydrateFromDb(db) {
+    setSettings(db.allSettings());
+    setCounts(db.historyCounts());
+    // Restore any drills the user generated but didn't answer last session.
+    // Without this, reopening the file burns N generate+approve cycles
+    // refilling a queue we already paid for.
+    for (const p of db.listPending()) {
+      dispatch({ type: "add", card: {
+        id: cardId(), drill: p.drill, pendingId: p.id,
+        state: "fresh", answer: "",
+        judgeProgress: [null, null, null],
+        verdicts: null, passed: null,
+      }});
+    }
+    const k = db.getSetting("api_key", "");
+    if (k) setApiKey(k);
+    return Boolean(k);
+  }
+
   async function loadDb(fresh) {
     setStatus("Loading database…");
     const s = storageRef.current;
@@ -91,17 +110,11 @@ function App() {
     if (s) db.onFlush = async (out) => { await s.write(out); };
     if (db.dirty) await db.flush();
     dbRef.current = db;
-    setSettings(db.allSettings());
-    setCounts(db.historyCounts());
+    const hasKey = hydrateFromDb(db);
     setPhase("ready");
-    setStatus(s ? `Database loaded (${s.name || "in memory"}).` : "In-memory database ready. Use Download to save.");
-    // Hydrate API key + kick off if present.
-    const k = db.getSetting("api_key", "");
-    if (k) {
-      setApiKey(k);
-      setStatus(buildReadyStatus());
-      // refill is run on next render via the effect below
-    }
+    setStatus(hasKey
+      ? buildReadyStatus()
+      : (s ? `Database loaded (${s.name || "in memory"}).` : "In-memory database ready. Use Download to save."));
   }
 
   // Refill effect: maintain queue_target fresh+grading cards while auto-gen is
@@ -128,8 +141,12 @@ function App() {
       const drill = await generateDrill();
       const { passed } = await approveDrill(drill);
       if (passed) {
+        // Persist the approved drill before showing it. If the user closes
+        // the tab before answering, the next launch picks it up via
+        // listPending instead of paying for another generation.
+        const pendingId = dbRef.current?.insertPending(drill);
         dispatch({ type: "add", card: {
-          id: cardId(), drill,
+          id: cardId(), drill, pendingId,
           state: "fresh", answer: "",
           judgeProgress: [null, null, null],
           verdicts: null, passed: null,
@@ -169,6 +186,7 @@ function App() {
         verdict: passed ? "pass" : "fail",
         judges_json: JSON.stringify(verdicts),
       });
+      dbRef.current.deletePending(card.pendingId);
       dispatch({ type: "update", id, patch: {
         state: passed ? "graded-pass" : "graded-fail",
         verdicts, passed,
@@ -182,7 +200,11 @@ function App() {
     }
   }
 
-  function skipCard(id) { dispatch({ type: "remove", id }); }
+  function skipCard(id) {
+    const card = cardsRef.current.find(c => c.id === id);
+    if (card?.pendingId) dbRef.current?.deletePending(card.pendingId);
+    dispatch({ type: "remove", id });
+  }
 
   function revealCard(id, typedAnswer) {
     // "I have no idea" path: record the drill as a fail without calling the
@@ -205,6 +227,7 @@ function App() {
       verdict: "fail",
       judges_json: JSON.stringify(verdicts),
     });
+    dbRef.current.deletePending(card.pendingId);
     dispatch({ type: "update", id, patch: {
       state: "graded-fail", verdicts, passed: false, answer,
     }});
@@ -258,20 +281,16 @@ function App() {
     const db = await DrillDb.open(bytes);
     if (db.dirty) await db.flush();
     dbRef.current = db;
-    setSettings(db.allSettings());
-    setCounts(db.historyCounts());
+    const hasKey = hydrateFromDb(db);
     setPhase("ready");
-    setStatus("In-memory database ready. Use Download to save.");
-    const k = db.getSetting("api_key", "");
-    if (k) { setApiKey(k); setStatus(buildReadyStatus()); }
+    setStatus(hasKey ? buildReadyStatus() : "In-memory database ready. Use Download to save.");
   }
   async function startInMemory() {
     storageRef.current = null;
     const db = await DrillDb.open(null);
     if (db.dirty) await db.flush();
     dbRef.current = db;
-    setSettings(db.allSettings());
-    setCounts(db.historyCounts());
+    hydrateFromDb(db);
     setPhase("ready");
     setStatus("In-memory database ready. Use Download to save.");
   }
