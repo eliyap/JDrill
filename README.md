@@ -7,8 +7,6 @@ a sibling `.sqlite` file in iCloud Drive owns the data. Open the page on any
 Chrome instance (Mac / iPad / iPhone) signed into the same iCloud account and
 you study off the same history.
 
-`v1/` is the previous DOM-as-database implementation, kept for reference.
-
 ## Architecture
 
 ```

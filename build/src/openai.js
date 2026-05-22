@@ -114,7 +114,7 @@ const JUDGE_SCHEMA = {
 async function callOpenAIOnce(userPayload, schema) {
   if (!hasApiKey()) throw new Error("no api key");
   const body = {
-    model: getSetting("model", "gpt-5"),
+    model: getSetting("model", "gpt-5.4"),
     service_tier: getSetting("service_tier", "flex"),
     temperature: parseFloat(getSetting("temperature", "1")),
     messages: [

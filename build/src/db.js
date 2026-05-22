@@ -78,14 +78,9 @@ export class DrillDb {
       this._seedDefaults();
       this.dirty = true;
     }
-    // Lightweight settings migrations — applied on every open, idempotent.
-    // No schema_version bump needed; these only touch the settings table.
-    if (this.getSetting("model", "") === "gpt-5") {
-      // The pre-pricing-table default. Rewrite to gpt-5.4 so users can
-      // reason about cost from OpenAI's published rate card.
-      this.setSetting("model", "gpt-5.4");
-    }
     // Backfill any setting that didn't exist when this DB was created.
+    // Idempotent; runs on every open. New default keys added later (e.g.,
+    // auto_generate) reach older DBs through this loop.
     for (const [k, dv] of Object.entries(DEFAULT_SETTINGS)) {
       if (!this._hasSetting(k)) this.setSetting(k, dv);
     }
