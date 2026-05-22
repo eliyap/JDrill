@@ -42,22 +42,38 @@
   button.primary { background: var(--accent); color: white; border-color: var(--accent); }
   .row { display: flex; gap: var(--gap); align-items: center; flex-wrap: wrap; }
   .muted { color: var(--muted); font-size: 13px; }
-  .prompt-en { font-size: 18px; margin: 8px 0 14px; }
   #status-line { font-size: 13px; color: var(--muted); white-space: pre-wrap; }
   [hidden] { display: none !important; }
   .verdict-pass { color: var(--pass); font-weight: 600; }
   .verdict-fail { color: var(--fail); font-weight: 600; }
-  .drill-entry { border-top: 1px dashed var(--border); padding: 8px 0; font-size: 13px; }
-  .drill-entry .meta { color: var(--muted); }
-  .drill-entry .prompt, .drill-entry .reference, .drill-entry .user-answer { margin: 2px 0; }
   details summary { cursor: pointer; user-select: none; }
-  .judges { margin-top: 8px; font-size: 13px; color: var(--muted); }
-  .judges .j { margin: 2px 0; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); font-size: 12px; margin-right: 4px; }
   .pill.pass { color: var(--pass); }
   .pill.fail { color: var(--fail); }
+  .pill.grading { color: var(--accent); }
+  .pill.fresh { color: var(--muted); }
   .ref-jp { font-size: 19px; }
-  .file-row { margin: 8px 0; }
+
+  /* Card stack */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: var(--gap);
+  }
+  .card[data-state="fresh"] { border-left: 3px solid var(--accent); }
+  .card[data-state="grading"] { border-left: 3px solid var(--accent); opacity: 0.85; }
+  .card[data-state="graded-pass"] { border-left: 3px solid var(--pass); }
+  .card[data-state="graded-fail"] { border-left: 3px solid var(--fail); }
+  .card-state-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .card-prompt { font-size: 17px; margin: 4px 0 10px; }
+  .card-actions { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  .card-reveal { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+  .judges { margin-top: 6px; font-size: 13px; color: var(--muted); }
+  .judges .j { margin: 2px 0; }
+  .drill-entry { border-top: 1px dashed var(--border); padding: 8px 0; font-size: 13px; }
+  .drill-entry .meta { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -91,7 +107,7 @@
 
   <div id="file-fallback" hidden>
     <p><strong>This browser can't autosave to a file.</strong> Use the upload/download path instead.</p>
-    <div class="file-row">
+    <div style="margin: 8px 0;">
       <label class="muted">Open existing .sqlite:</label>
       <input id="file-upload" type="file" accept=".sqlite,.sqlite3,.db,application/vnd.sqlite3">
     </div>
@@ -103,42 +119,24 @@
   </div>
 </section>
 
-<section id="key-section" hidden>
-  <p><strong>Enter your OpenAI API key.</strong> Held in memory only; never written to disk.</p>
+<section id="settings-section" hidden>
+  <label for="api-key" class="muted">OpenAI API key (stored in your .sqlite — clear it to stop):</label>
   <div class="row">
     <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" style="flex:1; min-width: 220px;">
-    <button id="key-submit" class="primary">Start</button>
+    <button id="api-key-show" type="button">Show</button>
   </div>
-  <p class="muted">Tip: paste your key once per launch. Closing the tab discards it.</p>
-</section>
 
-<section id="settings-section" hidden>
-  <label for="instructions" class="muted">Optional steering instructions (kept across launches):</label>
+  <label for="instructions" class="muted" style="display:block; margin-top:10px;">Optional steering instructions:</label>
   <textarea id="instructions" rows="2" placeholder="e.g. focus on ば conditionals; include cooking vocab"></textarea>
 </section>
 
-<section id="drill-card" hidden>
-  <div class="muted">Translate to Japanese:</div>
-  <div class="prompt-en" id="prompt-en"></div>
-  <textarea id="user-answer" lang="ja" placeholder="日本語で…" autocomplete="off" spellcheck="false"></textarea>
-  <div class="row" style="margin-top:8px;">
-    <button id="grade-btn" class="primary">Grade</button>
-    <button id="skip-btn">Skip</button>
+<section id="drill-area" hidden>
+  <div class="row" style="margin-bottom: 8px;">
+    <strong>Drills</strong>
     <span id="queue-status" class="muted"></span>
   </div>
-</section>
-
-<section id="reveal-panel" hidden>
-  <div class="row">
-    <span id="verdict-label"></span>
-    <span class="pill" id="target-grammar-pill"></span>
-  </div>
-  <div class="ref-jp" id="reference-jp"></div>
-  <div class="muted" id="drill-notes"></div>
-  <div class="judges" id="judges"></div>
-  <div class="row" style="margin-top:10px;">
-    <button id="next-btn" class="primary">Next drill</button>
-  </div>
+  <div id="cards-stack"></div>
+  <div id="empty-hint" class="muted" hidden>Generating first drill… (flex tier ~90s)</div>
 </section>
 
 <section id="stats-section" hidden>

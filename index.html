@@ -42,22 +42,38 @@
   button.primary { background: var(--accent); color: white; border-color: var(--accent); }
   .row { display: flex; gap: var(--gap); align-items: center; flex-wrap: wrap; }
   .muted { color: var(--muted); font-size: 13px; }
-  .prompt-en { font-size: 18px; margin: 8px 0 14px; }
   #status-line { font-size: 13px; color: var(--muted); white-space: pre-wrap; }
   [hidden] { display: none !important; }
   .verdict-pass { color: var(--pass); font-weight: 600; }
   .verdict-fail { color: var(--fail); font-weight: 600; }
-  .drill-entry { border-top: 1px dashed var(--border); padding: 8px 0; font-size: 13px; }
-  .drill-entry .meta { color: var(--muted); }
-  .drill-entry .prompt, .drill-entry .reference, .drill-entry .user-answer { margin: 2px 0; }
   details summary { cursor: pointer; user-select: none; }
-  .judges { margin-top: 8px; font-size: 13px; color: var(--muted); }
-  .judges .j { margin: 2px 0; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); font-size: 12px; margin-right: 4px; }
   .pill.pass { color: var(--pass); }
   .pill.fail { color: var(--fail); }
+  .pill.grading { color: var(--accent); }
+  .pill.fresh { color: var(--muted); }
   .ref-jp { font-size: 19px; }
-  .file-row { margin: 8px 0; }
+
+  /* Card stack */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    margin-bottom: var(--gap);
+  }
+  .card[data-state="fresh"] { border-left: 3px solid var(--accent); }
+  .card[data-state="grading"] { border-left: 3px solid var(--accent); opacity: 0.85; }
+  .card[data-state="graded-pass"] { border-left: 3px solid var(--pass); }
+  .card[data-state="graded-fail"] { border-left: 3px solid var(--fail); }
+  .card-state-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .card-prompt { font-size: 17px; margin: 4px 0 10px; }
+  .card-actions { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+  .card-reveal { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+  .judges { margin-top: 6px; font-size: 13px; color: var(--muted); }
+  .judges .j { margin: 2px 0; }
+  .drill-entry { border-top: 1px dashed var(--border); padding: 8px 0; font-size: 13px; }
+  .drill-entry .meta { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -91,7 +107,7 @@
 
   <div id="file-fallback" hidden>
     <p><strong>This browser can't autosave to a file.</strong> Use the upload/download path instead.</p>
-    <div class="file-row">
+    <div style="margin: 8px 0;">
       <label class="muted">Open existing .sqlite:</label>
       <input id="file-upload" type="file" accept=".sqlite,.sqlite3,.db,application/vnd.sqlite3">
     </div>
@@ -103,42 +119,24 @@
   </div>
 </section>
 
-<section id="key-section" hidden>
-  <p><strong>Enter your OpenAI API key.</strong> Held in memory only; never written to disk.</p>
+<section id="settings-section" hidden>
+  <label for="api-key" class="muted">OpenAI API key (stored in your .sqlite — clear it to stop):</label>
   <div class="row">
     <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" style="flex:1; min-width: 220px;">
-    <button id="key-submit" class="primary">Start</button>
+    <button id="api-key-show" type="button">Show</button>
   </div>
-  <p class="muted">Tip: paste your key once per launch. Closing the tab discards it.</p>
-</section>
 
-<section id="settings-section" hidden>
-  <label for="instructions" class="muted">Optional steering instructions (kept across launches):</label>
+  <label for="instructions" class="muted" style="display:block; margin-top:10px;">Optional steering instructions:</label>
   <textarea id="instructions" rows="2" placeholder="e.g. focus on ば conditionals; include cooking vocab"></textarea>
 </section>
 
-<section id="drill-card" hidden>
-  <div class="muted">Translate to Japanese:</div>
-  <div class="prompt-en" id="prompt-en"></div>
-  <textarea id="user-answer" lang="ja" placeholder="日本語で…" autocomplete="off" spellcheck="false"></textarea>
-  <div class="row" style="margin-top:8px;">
-    <button id="grade-btn" class="primary">Grade</button>
-    <button id="skip-btn">Skip</button>
+<section id="drill-area" hidden>
+  <div class="row" style="margin-bottom: 8px;">
+    <strong>Drills</strong>
     <span id="queue-status" class="muted"></span>
   </div>
-</section>
-
-<section id="reveal-panel" hidden>
-  <div class="row">
-    <span id="verdict-label"></span>
-    <span class="pill" id="target-grammar-pill"></span>
-  </div>
-  <div class="ref-jp" id="reference-jp"></div>
-  <div class="muted" id="drill-notes"></div>
-  <div class="judges" id="judges"></div>
-  <div class="row" style="margin-top:10px;">
-    <button id="next-btn" class="primary">Next drill</button>
-  </div>
+  <div id="cards-stack"></div>
+  <div id="empty-hint" class="muted" hidden>Generating first drill… (flex tier ~90s)</div>
 </section>
 
 <section id="stats-section" hidden>
@@ -2847,15 +2845,12 @@ PRAGMA user_version = 1;
   }
   var storage = null;
   var db = null;
-  var queue = [];
   var inflight = 0;
-  var currentDrill = null;
+  var cards = [];
   async function boot() {
     show("file-section", true);
-    show("key-section", false);
     show("settings-section", false);
-    show("drill-card", false);
-    show("reveal-panel", false);
+    show("drill-area", false);
     show("stats-section", false);
     const VOCAB2 = JSON.parse($("vocab").textContent || "[]");
     const GRAMMAR2 = JSON.parse($("grammar").textContent || "[]");
@@ -2865,10 +2860,7 @@ PRAGMA user_version = 1;
       getSettingFn: (key, def) => db ? db.getSetting(key, def) : def
     });
     wireFileSection();
-    wireKeySection();
     wireSettingsSection();
-    wireDrillSection();
-    wireRevealSection();
     wireUnloadFlush();
     const forceMem = new URLSearchParams(location.search).get("mem") === "1";
     if (forceMem || !isSupported()) {
@@ -2924,11 +2916,9 @@ PRAGMA user_version = 1;
       });
     }
     const newMem = $("file-new-mem-btn");
-    if (newMem) {
-      newMem.addEventListener("click", async () => {
-        await openInMemoryDb(null);
-      });
-    }
+    if (newMem) newMem.addEventListener("click", async () => {
+      await openInMemoryDb(null);
+    });
     const download = $("file-download-btn");
     if (download) {
       download.addEventListener("click", () => {
@@ -2975,9 +2965,7 @@ PRAGMA user_version = 1;
     let bytes = null;
     if (!fresh) {
       bytes = await storage.read();
-      if (bytes.length === 0) {
-        fresh = true;
-      }
+      if (bytes.length === 0) fresh = true;
     }
     db = await DrillDb.open(fresh ? null : bytes);
     db.onFlush = async (out) => {
@@ -2996,91 +2984,279 @@ PRAGMA user_version = 1;
   }
   function enterAppMode() {
     show("file-section", false);
-    show("key-section", !hasApiKey());
-    show("settings-section", hasApiKey());
-    show("drill-card", hasApiKey());
-    show("stats-section", true);
-    window.__app = { db, storage, queue, get currentDrill() {
-      return currentDrill;
-    } };
-    $("instructions").value = db.getSetting("instructions", "");
-    refreshStats();
-    if (hasApiKey()) {
-      renderCurrentDrill();
-      refillQueue();
-    }
-  }
-  function wireKeySection() {
-    $("key-submit").addEventListener("click", onSubmitKey);
-    $("api-key").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") onSubmitKey();
-    });
-  }
-  function onSubmitKey() {
-    const v = $("api-key").value.trim();
-    if (!v) {
-      alert("Paste an API key first.");
-      return;
-    }
-    setApiKey(v);
-    $("api-key").value = "";
-    show("key-section", false);
     show("settings-section", true);
-    show("drill-card", true);
+    show("drill-area", true);
     show("stats-section", true);
-    const s = stats();
-    setStatus(`Ready. Vocab: ${s.vocab} \xB7 Grammar: ${s.grammar} (${s.grammarTotal - s.grammar} unverified excluded). Generating first drill\u2026`);
-    renderCurrentDrill();
-    refillQueue();
+    $("api-key").value = db.getSetting("api_key", "");
+    $("instructions").value = db.getSetting("instructions", "");
+    const savedKey = db.getSetting("api_key", "");
+    if (savedKey) {
+      setApiKey(savedKey);
+      onKeyAvailable();
+    } else {
+      setStatus("Enter your OpenAI API key in the settings field to start drilling.");
+      $("empty-hint").textContent = "Enter your API key above to begin.";
+      show("empty-hint", true);
+    }
+    window.__app = {
+      db,
+      storage,
+      get cards() {
+        return cards.slice();
+      },
+      get inflight() {
+        return inflight;
+      }
+    };
+    refreshStats();
   }
   function wireSettingsSection() {
     $("instructions").addEventListener("blur", function() {
-      db.setSetting("instructions", this.value);
+      if (db) db.setSetting("instructions", this.value);
+    });
+    const keyEl = $("api-key");
+    keyEl.addEventListener("blur", function() {
+      if (!db) return;
+      const v = (this.value || "").trim();
+      const was = db.getSetting("api_key", "");
+      if (v === was) return;
+      db.setSetting("api_key", v);
+      if (v) {
+        setApiKey(v);
+        onKeyAvailable();
+      } else {
+        setApiKey(null);
+        setStatus("API key cleared. Add a key to resume drilling.");
+      }
+    });
+    keyEl.addEventListener("keydown", function(e) {
+      if (e.key === "Enter") this.blur();
+    });
+    $("api-key-show").addEventListener("click", function() {
+      const el = $("api-key");
+      if (el.type === "password") {
+        el.type = "text";
+        this.textContent = "Hide";
+      } else {
+        el.type = "password";
+        this.textContent = "Show";
+      }
     });
   }
-  function wireDrillSection() {
-    $("grade-btn").addEventListener("click", onGrade);
-    $("skip-btn").addEventListener("click", onSkip);
-    $("user-answer").addEventListener("keydown", (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onGrade();
-    });
+  function onKeyAvailable() {
+    const s = stats();
+    setStatus(`Ready. Vocab: ${s.vocab} \xB7 Grammar: ${s.grammar} (${s.grammarTotal - s.grammar} unverified excluded).`);
+    refillQueue();
+    updateEmptyHint();
   }
-  function wireRevealSection() {
-    $("next-btn").addEventListener("click", onNext);
+  var Card = class {
+    constructor(drill) {
+      this.drill = drill;
+      this.state = "fresh";
+      this.answer = "";
+      this.verdicts = null;
+      this.passed = null;
+      this.el = this._build();
+    }
+    _build() {
+      const el = document.createElement("article");
+      el.className = "card";
+      el.dataset.state = "fresh";
+      const stateRow = document.createElement("div");
+      stateRow.className = "card-state-row";
+      const statePill = document.createElement("span");
+      statePill.className = "pill fresh";
+      statePill.textContent = "fresh";
+      stateRow.appendChild(statePill);
+      el.appendChild(stateRow);
+      const prompt = document.createElement("div");
+      prompt.className = "card-prompt";
+      prompt.textContent = this.drill.prompt_en;
+      el.appendChild(prompt);
+      const answer = document.createElement("textarea");
+      answer.lang = "ja";
+      answer.placeholder = "\u65E5\u672C\u8A9E\u3067\u2026";
+      answer.autocomplete = "off";
+      answer.spellcheck = false;
+      el.appendChild(answer);
+      const actions = document.createElement("div");
+      actions.className = "card-actions";
+      const grade = document.createElement("button");
+      grade.className = "primary";
+      grade.textContent = "Grade";
+      const skip = document.createElement("button");
+      skip.textContent = "Skip";
+      actions.appendChild(grade);
+      actions.appendChild(skip);
+      el.appendChild(actions);
+      const reveal = document.createElement("div");
+      reveal.className = "card-reveal";
+      reveal.hidden = true;
+      el.appendChild(reveal);
+      this._statePill = statePill;
+      this._answerEl = answer;
+      this._gradeBtn = grade;
+      this._skipBtn = skip;
+      this._revealEl = reveal;
+      grade.addEventListener("click", () => this.startGrade());
+      skip.addEventListener("click", () => this.skip());
+      answer.addEventListener("keydown", (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === "Enter") this.startGrade();
+      });
+      return el;
+    }
+    _setState(state) {
+      this.state = state;
+      this.el.dataset.state = state;
+      if (state === "fresh") {
+        this._statePill.className = "pill fresh";
+        this._statePill.textContent = "fresh";
+      } else if (state === "grading") {
+        this._statePill.className = "pill grading";
+        this._statePill.textContent = "grading\u2026";
+      } else if (state === "graded-pass" || state === "graded" && this.passed) {
+        this._statePill.className = "pill pass";
+        this._statePill.textContent = "\u2713 pass";
+        this.el.dataset.state = "graded-pass";
+      } else if (state === "graded-fail" || state === "graded" && !this.passed) {
+        this._statePill.className = "pill fail";
+        this._statePill.textContent = "\u2717 miss";
+        this.el.dataset.state = "graded-fail";
+      }
+    }
+    async startGrade() {
+      if (this.state !== "fresh") return;
+      const v = (this._answerEl.value || "").trim();
+      if (!v) {
+        this._answerEl.focus();
+        return;
+      }
+      this.answer = v;
+      this._answerEl.disabled = true;
+      this._gradeBtn.disabled = true;
+      this._skipBtn.disabled = true;
+      this._setState("grading");
+      updateQueueStatus();
+      refillQueue();
+      try {
+        const { passed, verdicts } = await gradeAnswer(this.drill, this.answer);
+        this.passed = passed;
+        this.verdicts = verdicts;
+        persistHistory(this.drill, this.answer, passed, verdicts);
+        this._renderReveal();
+        this._setState(passed ? "graded-pass" : "graded-fail");
+        this._gradeBtn.remove();
+        this._skipBtn.remove();
+        refreshStats();
+        updateQueueStatus();
+      } catch (e) {
+        this._setState("fresh");
+        this._answerEl.disabled = false;
+        this._gradeBtn.disabled = false;
+        this._skipBtn.disabled = false;
+        const err = document.createElement("div");
+        err.className = "muted";
+        err.style.color = "var(--fail)";
+        err.textContent = "Grading failed: " + (e && e.message ? e.message : String(e));
+        this.el.appendChild(err);
+      }
+    }
+    skip() {
+      if (this.state !== "fresh") return;
+      const idx = cards.indexOf(this);
+      if (idx >= 0) cards.splice(idx, 1);
+      this.el.remove();
+      refillQueue();
+      updateQueueStatus();
+      updateEmptyHint();
+    }
+    _renderReveal() {
+      const drill = this.drill;
+      const reveal = this._revealEl;
+      reveal.hidden = false;
+      reveal.innerHTML = "";
+      const pillRow = document.createElement("div");
+      pillRow.className = "row";
+      const tg = document.createElement("span");
+      tg.className = "pill";
+      tg.textContent = drill.target_grammar_label || "";
+      pillRow.appendChild(tg);
+      reveal.appendChild(pillRow);
+      const ref = document.createElement("div");
+      ref.className = "ref-jp";
+      ref.textContent = drill.reference_jp;
+      reveal.appendChild(ref);
+      if (drill.notes) {
+        const n = document.createElement("div");
+        n.className = "muted";
+        n.textContent = drill.notes;
+        reveal.appendChild(n);
+      }
+      const judges = document.createElement("div");
+      judges.className = "judges";
+      this.verdicts.forEach((v, i) => {
+        const row = document.createElement("div");
+        row.className = "j";
+        row.innerHTML = '<span class="pill ' + (v.verdict === "yes" ? "pass" : "fail") + '">judge ' + (i + 1) + " \xB7 " + v.verdict + "</span> " + escapeText(v.reason);
+        judges.appendChild(row);
+      });
+      reveal.appendChild(judges);
+    }
+  };
+  function freshOrGradingCount() {
+    return cards.reduce((n, c) => n + (c.state === "fresh" || c.state === "grading" ? 1 : 0), 0);
   }
   function updateQueueStatus() {
     const el = $("queue-status");
     if (!el) return;
-    el.textContent = "Queue: " + queue.length + (inflight ? " (+" + inflight + " in flight)" : "");
+    const fresh = cards.reduce((n, c) => n + (c.state === "fresh" ? 1 : 0), 0);
+    const grading = cards.reduce((n, c) => n + (c.state === "grading" ? 1 : 0), 0);
+    const tail = grading || inflight ? " \xB7 " + grading + " grading \xB7 " + inflight + " generating" : "";
+    el.textContent = fresh + " ready" + tail;
   }
-  function revealVisible() {
-    const el = $("reveal-panel");
-    return el && !el.hasAttribute("hidden");
+  function updateEmptyHint() {
+    const hint = $("empty-hint");
+    if (!hint) return;
+    if (!hasApiKey()) {
+      hint.hidden = false;
+      hint.textContent = "Enter your API key above to begin.";
+      return;
+    }
+    hint.hidden = cards.length > 0;
+    if (!hint.hidden) {
+      hint.textContent = "Generating first drill\u2026 (flex tier ~90s)";
+    }
+  }
+  function appendCard(drill) {
+    const card = new Card(drill);
+    cards.push(card);
+    $("cards-stack").appendChild(card.el);
+    updateQueueStatus();
+    updateEmptyHint();
+    if (document.activeElement === document.body) {
+      const firstFresh = cards.find((c) => c.state === "fresh");
+      if (firstFresh) firstFresh._answerEl.focus();
+    }
   }
   function refillQueue() {
-    if (!hasApiKey()) return;
+    if (!hasApiKey() || !db) return;
     const target = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
-    while (queue.length + inflight < target) {
+    while (freshOrGradingCount() + inflight < target) {
       inflight++;
+      updateQueueStatus();
       generateAndApprove().then((drill) => {
-        if (drill) {
-          queue.push(drill);
-          if (currentDrill === null && !revealVisible()) {
-            renderCurrentDrill();
-          }
-        }
+        if (drill) appendCard(drill);
       }).catch((err) => {
         if (!err.skip) console.error("prefetch error:", err);
       }).finally(() => {
         inflight--;
         updateQueueStatus();
         const t2 = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
-        if (hasApiKey() && queue.length + inflight < t2) {
+        if (hasApiKey() && freshOrGradingCount() + inflight < t2) {
           setTimeout(refillQueue, 50);
         }
       });
     }
-    updateQueueStatus();
   }
   async function generateAndApprove() {
     const drill = await generateDrill();
@@ -3088,66 +3264,6 @@ PRAGMA user_version = 1;
     if (!passed) return null;
     drill._approval = verdicts;
     return drill;
-  }
-  function renderCurrentDrill() {
-    if (!currentDrill) {
-      if (queue.length === 0) {
-        $("prompt-en").textContent = "Generating\u2026";
-        $("user-answer").value = "";
-        $("user-answer").disabled = true;
-        $("grade-btn").disabled = true;
-        return;
-      }
-      currentDrill = queue.shift();
-      refillQueue();
-    }
-    $("prompt-en").textContent = currentDrill.prompt_en;
-    $("user-answer").value = "";
-    $("user-answer").disabled = false;
-    $("grade-btn").disabled = false;
-    $("skip-btn").disabled = false;
-    $("user-answer").focus();
-    show("reveal-panel", false);
-    show("drill-card", true);
-  }
-  async function onGrade() {
-    if (!currentDrill) return;
-    const answer = $("user-answer").value.trim();
-    if (!answer) {
-      alert("Type an answer first.");
-      return;
-    }
-    $("grade-btn").disabled = true;
-    $("skip-btn").disabled = true;
-    $("user-answer").disabled = true;
-    setStatus("Grading\u2026");
-    try {
-      const { passed, verdicts } = await gradeAnswer(currentDrill, answer);
-      persistHistory(currentDrill, answer, passed, verdicts);
-      showReveal(currentDrill, passed, verdicts);
-      refreshStats();
-      setStatus("Saved.");
-    } catch (e) {
-      setStatus("Grading failed: " + e.message);
-      $("grade-btn").disabled = false;
-      $("skip-btn").disabled = false;
-      $("user-answer").disabled = false;
-    }
-  }
-  function showReveal(drill, passed, verdicts) {
-    $("verdict-label").innerHTML = passed ? '<span class="verdict-pass">\u2713 Pass</span>' : '<span class="verdict-fail">\u2717 Miss</span>';
-    $("target-grammar-pill").textContent = drill.target_grammar_label || "";
-    $("reference-jp").textContent = drill.reference_jp;
-    $("drill-notes").textContent = drill.notes || "";
-    const judgesEl = $("judges");
-    judgesEl.innerHTML = "";
-    verdicts.forEach((v, i) => {
-      const row = document.createElement("div");
-      row.className = "j";
-      row.innerHTML = '<span class="pill ' + (v.verdict === "yes" ? "pass" : "fail") + '">judge ' + (i + 1) + " \xB7 " + v.verdict + "</span> " + escapeText(v.reason);
-      judgesEl.appendChild(row);
-    });
-    show("reveal-panel", true);
   }
   function persistHistory(drill, userAnswer, passed, verdicts) {
     db.insertHistory({
@@ -3161,14 +3277,6 @@ PRAGMA user_version = 1;
       verdict: passed ? "pass" : "fail",
       judges_json: JSON.stringify(verdicts)
     });
-  }
-  function onNext() {
-    currentDrill = null;
-    renderCurrentDrill();
-  }
-  function onSkip() {
-    currentDrill = null;
-    renderCurrentDrill();
   }
   function refreshStats() {
     if (!db) return;
@@ -3186,28 +3294,14 @@ PRAGMA user_version = 1;
       meta.textContent = (row.verdict === "pass" ? "\u2713 " : "\u2717 ") + (row.target_grammar_label || "") + " \xB7 " + dt.toLocaleString();
       el.appendChild(meta);
       const p = document.createElement("div");
-      p.className = "prompt";
       p.textContent = "EN: " + row.prompt_en;
       el.appendChild(p);
       const r = document.createElement("div");
-      r.className = "reference";
       r.textContent = "REF: " + row.reference_jp;
       el.appendChild(r);
       const u = document.createElement("div");
-      u.className = "user-answer";
       u.textContent = "YOU: " + row.user_answer;
       el.appendChild(u);
-      let judges = [];
-      try {
-        judges = JSON.parse(row.judges_json || "[]");
-      } catch (_) {
-      }
-      judges.forEach((j, i) => {
-        const d = document.createElement("div");
-        d.className = "j";
-        d.textContent = "judge " + (i + 1) + ": " + j.verdict + " \u2014 " + j.reason;
-        el.appendChild(d);
-      });
       view.appendChild(el);
     }
   }

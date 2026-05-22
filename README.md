@@ -114,15 +114,22 @@ index.html          # final shipped artifact
    `{ prompt_en, reference_jp, target_grammar_id, target_grammar_label, notes }`.
 2. **Approval** — 3 parallel GPT-5 calls, distinct seeds, non-zero
    temperature, judge whether the reference correctly demonstrates the
-   chosen grammar. Unanimous yes admits the drill to the queue.
-3. **Queue** — prefetch maintains `queue_target` approved drills
-   (default 5) so flex-tier latency is hidden during study.
-4. **Answer** — user types Japanese; Cmd/Ctrl+Enter to submit.
+   chosen grammar. Unanimous yes admits the drill to the visible stack.
+3. **Stack** — approved drills appear as <article> cards in a chronological
+   list. `queue_target` (default 5) fresh+grading cards are maintained at
+   any time; the background loop generates more as the user works through
+   them.
+4. **Answer** — user types Japanese into any fresh card; Cmd/Ctrl+Enter or
+   the Grade button submits. The card transitions to `grading` and the
+   user immediately moves on to the next card. Multiple cards can be
+   grading concurrently.
 5. **Grading** — 3 parallel GPT-5 calls judge semantic + grammatical
    equivalence to the reference. Unanimous yes = pass.
 6. **Record** — `INSERT INTO history` → `markDirty()` → 5-second debounced
    autosave writes the DB bytes back to the file via File System Access API.
-7. **Reveal** — show verdict, reference, judge reasoning, target grammar.
+7. **Reveal** — the card transitions to `graded-pass` or `graded-fail`
+   in place, showing verdict, reference, judge reasoning, and target
+   grammar pill. The card stays in the stack as a record of this session.
 
 ## Prompt caching
 
@@ -141,13 +148,15 @@ calls (1 generate + 3 approve + 3 grade).
 
 ## Privacy / security
 
-- API key is held in a JavaScript closure variable, never written to DOM,
-  never written to IndexedDB, never written to the SQLite file. It is lost
-  when the tab closes.
-- The `.sqlite` file contains drill history (prompts you saw, your answers,
-  judge reasoning). It does **not** contain the API key.
-- All calls go to `api.openai.com` over HTTPS. No analytics, no CDNs, no
-  fonts, no telemetry.
+- The API key is stored in the `settings` table of your `.sqlite` file. It
+  persists across launches so you don't have to retype it. This trades
+  the "never on disk" purity for usability; treat the `.sqlite` like any
+  other file containing a credential. Clearing the API-key field in the UI
+  removes it from the DB.
+- The `.sqlite` file also contains drill history (prompts you saw, your
+  answers, judge reasoning).
+- All API calls go to `api.openai.com` over HTTPS. No analytics, no CDNs,
+  no fonts, no telemetry.
 
 ## URL parameters
 
