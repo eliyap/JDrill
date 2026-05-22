@@ -1,7 +1,13 @@
-// Entry point. Wires the file picker, sql.js, OpenAI calls, and the drill
-// stack. The drill UI is a chronological list of <article class="card">
-// elements, each owning its own state machine (fresh → grading → graded).
-// Multiple cards can be grading in parallel; the user is never blocked.
+// Entry point. Wires the file picker, tab switching, drill-stack rendering,
+// and the OpenAI cycle.
+//
+// State machine (post-boot):
+//   - file-section visible until the user opens / creates / uploads a .sqlite
+//   - then tabs (Revision | Settings) appear; default tab is Revision
+//
+// Auto-gen toggle defaults OFF for cost control. With it off, the user must
+// click "Generate next" once per drill they want. With it on, the runtime
+// maintains queue_target ready cards via background refill.
 
 import { DrillDb } from "./db.js";
 import { FileStorage, isSupported as fsaaSupported } from "./storage.js";
@@ -40,17 +46,18 @@ function escapeText(s) {
 
 // -- Module state -------------------------------------------------------------
 
-let storage = null;          // FileStorage
-let db = null;               // DrillDb
-let inflight = 0;            // generate+approve calls running
-const cards = [];            // ordered array of Card instances
+let storage = null;          // FileStorage | null (null in in-memory fallback)
+let db = null;
+let inflight = 0;
+const cards = [];
 
 // -- Boot ---------------------------------------------------------------------
 
 async function boot() {
   show("file-section", true);
-  show("settings-section", false);
-  show("drill-area", false);
+  show("tabs", false);
+  show("tab-revision", false);
+  show("tab-settings", false);
   show("stats-section", false);
 
   const VOCAB = JSON.parse($("vocab").textContent || "[]");
@@ -62,7 +69,9 @@ async function boot() {
   });
 
   wireFileSection();
-  wireSettingsSection();
+  wireTabs();
+  wireControls();
+  wireSettings();
   wireUnloadFlush();
 
   const forceMem = new URLSearchParams(location.search).get("mem") === "1";
@@ -73,6 +82,24 @@ async function boot() {
 
   storage = await FileStorage.restore();
   await renderFileSection();
+}
+
+// -- Tab switching ------------------------------------------------------------
+
+function wireTabs() {
+  document.querySelectorAll('[role="tab"]').forEach((btn) => {
+    btn.addEventListener("click", () => switchTab(btn.dataset.tabTarget));
+  });
+}
+
+function switchTab(target) {
+  document.querySelectorAll('[role="tab"]').forEach((b) => {
+    b.setAttribute("aria-selected", b.dataset.tabTarget === target ? "true" : "false");
+  });
+  document.querySelectorAll('[data-tab]').forEach((s) => {
+    if (s.dataset.tab === target) s.removeAttribute("hidden");
+    else s.setAttribute("hidden", "");
+  });
 }
 
 // -- File section -------------------------------------------------------------
@@ -122,18 +149,26 @@ function wireFileSection() {
   const newMem = $("file-new-mem-btn");
   if (newMem) newMem.addEventListener("click", async () => { await openInMemoryDb(null); });
   const download = $("file-download-btn");
-  if (download) {
-    download.addEventListener("click", () => {
-      if (!db) return;
-      const bytes = db.exportBytes();
-      const blob = new Blob([bytes], { type: "application/vnd.sqlite3" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = "n4-drill.sqlite";
-      document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    });
-  }
+  if (download) download.addEventListener("click", downloadDb);
+
+  // Settings-tab equivalents that act on the live (post-boot) state.
+  $("settings-forget-btn").addEventListener("click", async () => {
+    if (!storage) return;
+    await storage.forget();
+    location.reload();
+  });
+  $("settings-download-btn").addEventListener("click", downloadDb);
+}
+
+function downloadDb() {
+  if (!db) return;
+  const bytes = db.exportBytes();
+  const blob = new Blob([bytes], { type: "application/vnd.sqlite3" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "n4-drill.sqlite";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function renderFileSection() {
@@ -177,7 +212,7 @@ async function loadFromHandle({ fresh = false } = {}) {
 async function openInMemoryDb(bytes) {
   setStatus("Loading database (in-memory)…");
   db = await DrillDb.open(bytes);
-  show("file-download-btn", true);
+  show("settings-download-btn", true);
   setStatus("In-memory database ready. Use Download to save.");
   enterAppMode();
 }
@@ -186,22 +221,31 @@ async function openInMemoryDb(bytes) {
 
 function enterAppMode() {
   show("file-section", false);
-  show("settings-section", true);
-  show("drill-area", true);
+  show("tabs", true);
   show("stats-section", true);
+  switchTab("revision");
 
-  $("api-key").value = db.getSetting("api_key", "");
-  $("instructions").value = db.getSetting("instructions", "");
+  hydrateControlsFromDb();
 
-  // If a key is already saved, prime the OpenAI module and start drilling.
+  // File-controls section in Settings tab.
+  if (storage && storage.name) {
+    $("current-file-name").textContent = storage.name;
+    show("file-controls-section", true);
+    show("settings-forget-btn", true);
+    show("settings-download-btn", false);
+  } else {
+    show("file-controls-section", true);
+    $("current-file-name").textContent = "in-memory session";
+    show("settings-forget-btn", false);
+    show("settings-download-btn", true);
+  }
+
   const savedKey = db.getSetting("api_key", "");
   if (savedKey) {
     setApiKey(savedKey);
     onKeyAvailable();
   } else {
-    setStatus("Enter your OpenAI API key in the settings field to start drilling.");
-    $("empty-hint").textContent = "Enter your API key above to begin.";
-    show("empty-hint", true);
+    setStatus("Add your OpenAI API key in Settings to begin.");
   }
 
   window.__app = {
@@ -212,13 +256,87 @@ function enterAppMode() {
   };
 
   refreshStats();
+  updateEmptyHint();
+  updateQueueStatus();
 }
 
-// -- Settings -----------------------------------------------------------------
+function onKeyAvailable() {
+  const s = openAiStats();
+  setStatus(`Ready. Vocab: ${s.vocab} · Grammar: ${s.grammar} (${s.grammarTotal - s.grammar} unverified excluded).`);
+  refillQueue();
+  updateEmptyHint();
+}
 
-function wireSettingsSection() {
+// -- Controls (Revision tab) --------------------------------------------------
+
+function hydrateControlsFromDb() {
+  // Tier
+  const tier = db.getSetting("service_tier", "flex");
+  const tierRadio = document.querySelector(`#tier-seg input[value="${tier}"]`);
+  if (tierRadio) tierRadio.checked = true;
+
+  // Model
+  const model = db.getSetting("model", "gpt-5.4");
+  let modelRadio = document.querySelector(`#model-seg input[value="${model}"]`);
+  if (!modelRadio) {
+    // Unrecognized model (e.g., user typed gpt-5.5 manually); default the
+    // selector to Full so the user sees something selected and can pick.
+    modelRadio = document.querySelector('#model-seg input[value="gpt-5.4"]');
+  }
+  if (modelRadio) modelRadio.checked = true;
+
+  // Auto-gen
+  const auto = db.getSetting("auto_generate", "0") === "1";
+  $("auto-gen-toggle").checked = auto;
+
+  // Queue target
+  $("queue-target").value = db.getSetting("queue_target", "5");
+
+  // Instructions
+  $("instructions").value = db.getSetting("instructions", "");
+
+  // API key
+  $("api-key").value = db.getSetting("api_key", "");
+}
+
+function wireControls() {
+  document.querySelectorAll('#tier-seg input').forEach((r) => {
+    r.addEventListener("change", () => {
+      if (r.checked && db) db.setSetting("service_tier", r.value);
+    });
+  });
+  document.querySelectorAll('#model-seg input').forEach((r) => {
+    r.addEventListener("change", () => {
+      if (r.checked && db) db.setSetting("model", r.value);
+    });
+  });
+  $("auto-gen-toggle").addEventListener("change", function () {
+    if (!db) return;
+    db.setSetting("auto_generate", this.checked ? "1" : "0");
+    if (this.checked && hasApiKey()) refillQueue();
+    updateEmptyHint();
+  });
+  $("generate-one-btn").addEventListener("click", () => {
+    if (!hasApiKey()) {
+      setStatus("Add your API key in Settings first.");
+      return;
+    }
+    kickOffOneGeneration();
+  });
+}
+
+// -- Settings tab handlers ----------------------------------------------------
+
+function wireSettings() {
   $("instructions").addEventListener("blur", function () {
     if (db) db.setSetting("instructions", this.value);
+  });
+  $("queue-target").addEventListener("change", function () {
+    if (!db) return;
+    const v = Math.max(1, Math.min(20, parseInt(this.value, 10) || 5));
+    this.value = String(v);
+    db.setSetting("queue_target", String(v));
+    if (hasApiKey()) refillQueue();
   });
 
   const keyEl = $("api-key");
@@ -234,6 +352,7 @@ function wireSettingsSection() {
     } else {
       setApiKey(null);
       setStatus("API key cleared. Add a key to resume drilling.");
+      updateEmptyHint();
     }
   });
   keyEl.addEventListener("keydown", function (e) {
@@ -247,19 +366,12 @@ function wireSettingsSection() {
   });
 }
 
-function onKeyAvailable() {
-  const s = openAiStats();
-  setStatus(`Ready. Vocab: ${s.vocab} · Grammar: ${s.grammar} (${s.grammarTotal - s.grammar} unverified excluded).`);
-  refillQueue();
-  updateEmptyHint();
-}
-
 // -- Drill stack --------------------------------------------------------------
 
 class Card {
   constructor(drill) {
     this.drill = drill;
-    this.state = "fresh";  // fresh | grading | graded
+    this.state = "fresh";
     this.answer = "";
     this.verdicts = null;
     this.passed = null;
@@ -322,9 +434,24 @@ class Card {
     return el;
   }
 
+  _setState(state) {
+    this.state = state;
+    if (state === "fresh") {
+      this.el.dataset.state = "fresh";
+      this._statePill.className = "pill fresh"; this._statePill.textContent = "fresh";
+    } else if (state === "grading") {
+      this.el.dataset.state = "grading";
+      this._statePill.className = "pill grading"; this._statePill.textContent = "grading…";
+    } else if (state === "graded-pass") {
+      this.el.dataset.state = "graded-pass";
+      this._statePill.className = "pill pass"; this._statePill.textContent = "✓ pass";
+    } else if (state === "graded-fail") {
+      this.el.dataset.state = "graded-fail";
+      this._statePill.className = "pill fail"; this._statePill.textContent = "✗ miss";
+    }
+  }
+
   _renderJudgePanel() {
-    // Replace the actions row with three pending judge pills. They'll be
-    // mutated in place as judge promises resolve.
     const actions = this.el.querySelector(".card-actions");
     if (!actions) return;
     actions.innerHTML = "";
@@ -345,31 +472,9 @@ class Card {
     if (!pill) return;
     pill.classList.remove("pending");
     if (verdict && verdict.verdict === "yes") {
-      pill.classList.add("pass");
-      pill.textContent = `judge ${i + 1} ✓`;
+      pill.classList.add("pass"); pill.textContent = `judge ${i + 1} ✓`;
     } else {
-      pill.classList.add("fail");
-      pill.textContent = `judge ${i + 1} ✗`;
-    }
-  }
-
-  _setState(state) {
-    this.state = state;
-    this.el.dataset.state = state;
-    if (state === "fresh") {
-      this._statePill.className = "pill fresh";
-      this._statePill.textContent = "fresh";
-    } else if (state === "grading") {
-      this._statePill.className = "pill grading";
-      this._statePill.textContent = "grading…";
-    } else if (state === "graded-pass" || (state === "graded" && this.passed)) {
-      this._statePill.className = "pill pass";
-      this._statePill.textContent = "✓ pass";
-      this.el.dataset.state = "graded-pass";
-    } else if (state === "graded-fail" || (state === "graded" && !this.passed)) {
-      this._statePill.className = "pill fail";
-      this._statePill.textContent = "✗ miss";
-      this.el.dataset.state = "graded-fail";
+      pill.classList.add("fail"); pill.textContent = `judge ${i + 1} ✗`;
     }
   }
 
@@ -394,12 +499,9 @@ class Card {
       persistHistory(this.drill, this.answer, passed, verdicts);
       this._renderReveal();
       this._setState(passed ? "graded-pass" : "graded-fail");
-      this._gradeBtn.remove();
-      this._skipBtn.remove();
       refreshStats();
       updateQueueStatus();
     } catch (e) {
-      // Allow retry: drop back to fresh state.
       this._setState("fresh");
       this._answerEl.disabled = false;
       this._gradeBtn.disabled = false;
@@ -414,11 +516,10 @@ class Card {
 
   skip() {
     if (this.state !== "fresh") return;
-    // Remove from stack; refill will replace it.
     const idx = cards.indexOf(this);
     if (idx >= 0) cards.splice(idx, 1);
     this.el.remove();
-    refillQueue();
+    if (db && db.getSetting("auto_generate", "0") === "1") refillQueue();
     updateQueueStatus();
     updateEmptyHint();
   }
@@ -470,7 +571,6 @@ function updateQueueStatus() {
   if (!el) return;
   const fresh = cards.reduce((n, c) => n + (c.state === "fresh" ? 1 : 0), 0);
   const grading = cards.reduce((n, c) => n + (c.state === "grading" ? 1 : 0), 0);
-  // Generations in flight are shown visually as ghost cards, not text.
   el.textContent = fresh + " ready" + (grading ? " · " + grading + " grading" : "");
 }
 
@@ -479,18 +579,20 @@ function updateEmptyHint() {
   if (!hint) return;
   if (!hasApiKey()) {
     hint.hidden = false;
-    hint.textContent = "Enter your API key above to begin.";
+    hint.textContent = "Add your API key in Settings to begin.";
     return;
   }
-  // Ghosts are visible whenever generations are in flight, so the hint is
-  // only useful in the brief window before the first ghost is appended.
+  const autoOn = db && db.getSetting("auto_generate", "0") === "1";
+  const hasCards = cards.length > 0 || inflight > 0;
+  if (!hasCards && !autoOn) {
+    hint.hidden = false;
+    hint.textContent = "Press “Generate next” to create a drill. Toggle Auto-gen on if you'd rather have a steady queue.";
+    return;
+  }
   hint.hidden = true;
 }
 
 function createGhost() {
-  // Apple-widget shimmer skeleton. Inserted as a real <article> at the
-  // bottom of the stack while generation+approval runs; replaced in-place
-  // with a Card on success, removed on failure.
   const el = document.createElement("article");
   el.className = "card ghost";
   el.innerHTML = `
@@ -517,39 +619,47 @@ function replaceGhostWithCard(ghost, drill) {
   }
 }
 
-function refillQueue() {
+function kickOffOneGeneration() {
   if (!hasApiKey() || !db) return;
-  const target = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
-  while (freshOrGradingCount() + inflight < target) {
-    inflight++;
-    const ghost = createGhost();
-    updateQueueStatus();
-    updateEmptyHint();
-    generateAndApprove()
-      .then((drill) => {
-        if (drill) replaceGhostWithCard(ghost, drill);
-        else ghost.remove();
-      })
-      .catch((err) => {
-        if (!err.skip) console.error("[prefetch]", err);
-        ghost.remove();
-      })
-      .finally(() => {
-        inflight--;
-        updateQueueStatus();
-        updateEmptyHint();
-        const t2 = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
-        if (hasApiKey() && freshOrGradingCount() + inflight < t2) {
+  inflight++;
+  const ghost = createGhost();
+  updateQueueStatus();
+  updateEmptyHint();
+  generateAndApprove()
+    .then((drill) => {
+      if (drill) replaceGhostWithCard(ghost, drill);
+      else ghost.remove();
+    })
+    .catch((err) => {
+      if (!err.skip) console.error("[prefetch]", err);
+      ghost.remove();
+    })
+    .finally(() => {
+      inflight--;
+      updateQueueStatus();
+      updateEmptyHint();
+      if (db.getSetting("auto_generate", "0") === "1") {
+        const t = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
+        if (hasApiKey() && freshOrGradingCount() + inflight < t) {
           setTimeout(refillQueue, 50);
         }
-      });
+      }
+    });
+}
+
+function refillQueue() {
+  if (!hasApiKey() || !db) return;
+  if (db.getSetting("auto_generate", "0") !== "1") return;
+  const target = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
+  while (freshOrGradingCount() + inflight < target) {
+    kickOffOneGeneration();
   }
 }
 
 async function generateAndApprove() {
   const drill = await generateDrill();
   const { passed, verdicts } = await approveDrill(drill);
-  if (!passed) return null;  // [approval] log emitted inside approveDrill
+  if (!passed) return null;
   drill._approval = verdicts;
   return drill;
 }

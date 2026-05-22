@@ -41,13 +41,14 @@ PRAGMA user_version = 1;
 `;
 
 const DEFAULT_SETTINGS = {
-  model: "gpt-5",
+  model: "gpt-5.4",
   service_tier: "flex",
   temperature: "1",
   grammar_sample_size: "2",
   vocab_sample_size: "10",
   queue_target: "5",
   instructions: "",
+  auto_generate: "0",
 };
 
 export class DrillDb {
@@ -77,7 +78,27 @@ export class DrillDb {
       this._seedDefaults();
       this.dirty = true;
     }
-    // Future migrations would chain here, each bumping user_version.
+    // Lightweight settings migrations — applied on every open, idempotent.
+    // No schema_version bump needed; these only touch the settings table.
+    if (this.getSetting("model", "") === "gpt-5") {
+      // The pre-pricing-table default. Rewrite to gpt-5.4 so users can
+      // reason about cost from OpenAI's published rate card.
+      this.setSetting("model", "gpt-5.4");
+    }
+    // Backfill any setting that didn't exist when this DB was created.
+    for (const [k, dv] of Object.entries(DEFAULT_SETTINGS)) {
+      if (!this._hasSetting(k)) this.setSetting(k, dv);
+    }
+  }
+
+  _hasSetting(key) {
+    const stmt = this.db.prepare("SELECT 1 FROM settings WHERE key = ?");
+    try {
+      stmt.bind([key]);
+      return stmt.step();
+    } finally {
+      stmt.free();
+    }
   }
 
   userVersion() {

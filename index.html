@@ -31,10 +31,12 @@
     margin-inline: auto;
   }
   h1 { font-size: 18px; margin: 4px 0 12px; }
+  h2 { font-size: 14px; margin: 4px 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
   section { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: var(--gap); }
-  textarea, input[type=password], input[type=text], input[type=file] {
+  textarea, input[type=password], input[type=text], input[type=number], input[type=file] {
     width: 100%; font: inherit; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: inherit;
   }
+  input[type=number] { width: 100px; }
   textarea { min-height: 80px; resize: vertical; }
   textarea[lang="ja"] { font-size: 19px; line-height: 1.5; }
   button { font: inherit; padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: inherit; cursor: pointer; }
@@ -53,6 +55,49 @@
   .pill.grading { color: var(--accent); }
   .pill.fresh { color: var(--muted); }
   .ref-jp { font-size: 19px; }
+
+  /* Tabs */
+  .tabs {
+    display: flex; gap: 4px; margin-bottom: var(--gap);
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 4px;
+  }
+  .tabs button {
+    flex: 1; padding: 8px 12px; border: 0; background: transparent; color: var(--muted); font-weight: 500; border-radius: 6px;
+  }
+  .tabs button[aria-selected="true"] {
+    background: var(--accent); color: white;
+  }
+
+  /* Segmented controls */
+  .segmented {
+    display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+    background: var(--bg);
+  }
+  .segmented label {
+    padding: 6px 10px; cursor: pointer; font-size: 13px; user-select: none;
+  }
+  .segmented input { display: none; }
+  .segmented label:has(input:checked) {
+    background: var(--accent); color: white;
+  }
+  .segmented label + label { border-left: 1px solid var(--border); }
+
+  /* Toggle switch */
+  .toggle { position: relative; display: inline-block; width: 38px; height: 22px; vertical-align: middle; }
+  .toggle input { opacity: 0; width: 0; height: 0; }
+  .toggle .slider {
+    position: absolute; cursor: pointer; inset: 0;
+    background: var(--border); border-radius: 22px; transition: 0.2s;
+  }
+  .toggle .slider::before {
+    position: absolute; content: ""; height: 16px; width: 16px; left: 3px; top: 3px;
+    background: white; border-radius: 50%; transition: 0.2s;
+  }
+  .toggle input:checked + .slider { background: var(--accent); }
+  .toggle input:checked + .slider::before { transform: translateX(16px); }
+
+  .control-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0; }
+  .control-row .label { font-size: 13px; color: var(--muted); min-width: 80px; }
 
   /* Card stack */
   .card {
@@ -113,7 +158,7 @@
     50%      { opacity: 0.45; transform: scale(0.85); }
   }
 
-  /* Ghost / placeholder card while generation+approval is in flight */
+  /* Ghost / placeholder card */
   .card.ghost {
     border-left: 3px solid var(--muted);
     opacity: 0.85;
@@ -121,9 +166,7 @@
   }
   .ghost-skel {
     background: linear-gradient(90deg,
-      var(--bg) 0%,
-      var(--border) 50%,
-      var(--bg) 100%);
+      var(--bg) 0%, var(--border) 50%, var(--bg) 100%);
     background-size: 200% 100%;
     animation: ghost-shimmer 1.6s linear infinite;
     border-radius: 6px;
@@ -147,6 +190,7 @@
 <h1>N4 Grammar Drill</h1>
 <div id="status-line">Loading…</div>
 
+<!-- File picker (pre-tab state) -->
 <section id="file-section">
   <div id="file-fsaa-pick" hidden>
     <p><strong>Choose where drill history is stored.</strong> The .sqlite file lives in your iCloud Drive; the app keeps the file in sync as you study.</p>
@@ -181,25 +225,80 @@
   </div>
 </section>
 
-<section id="settings-section" hidden>
-  <label for="api-key" class="muted">OpenAI API key (stored in your .sqlite — clear it to stop):</label>
-  <div class="row">
-    <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" style="flex:1; min-width: 220px;">
-    <button id="api-key-show" type="button">Show</button>
-  </div>
+<!-- Tab bar -->
+<div class="tabs" id="tabs" role="tablist" hidden>
+  <button role="tab" aria-selected="true" data-tab-target="revision">Revision</button>
+  <button role="tab" aria-selected="false" data-tab-target="settings">Settings</button>
+</div>
 
-  <label for="instructions" class="muted" style="display:block; margin-top:10px;">Optional steering instructions:</label>
-  <textarea id="instructions" rows="2" placeholder="e.g. focus on ば conditionals; include cooking vocab"></textarea>
-</section>
+<!-- Revision tab -->
+<div id="tab-revision" data-tab="revision" hidden>
+  <section>
+    <div class="control-row">
+      <span class="label">Tier</span>
+      <div class="segmented" id="tier-seg">
+        <label><input type="radio" name="tier" value="flex">Flex</label>
+        <label><input type="radio" name="tier" value="default">Fast</label>
+      </div>
+    </div>
+    <div class="control-row">
+      <span class="label">Model</span>
+      <div class="segmented" id="model-seg">
+        <label><input type="radio" name="model" value="gpt-5.4-nano">Nano</label>
+        <label><input type="radio" name="model" value="gpt-5.4-mini">Mini</label>
+        <label><input type="radio" name="model" value="gpt-5.4">Full</label>
+      </div>
+    </div>
+    <div class="control-row">
+      <span class="label">Auto-gen</span>
+      <label class="toggle">
+        <input type="checkbox" id="auto-gen-toggle">
+        <span class="slider"></span>
+      </label>
+      <button id="generate-one-btn">Generate next</button>
+      <span id="queue-status" class="muted"></span>
+    </div>
+    <div id="empty-hint" class="muted" hidden></div>
+  </section>
 
-<section id="drill-area" hidden>
-  <div class="row" style="margin-bottom: 8px;">
-    <strong>Drills</strong>
-    <span id="queue-status" class="muted"></span>
-  </div>
   <div id="cards-stack"></div>
-  <div id="empty-hint" class="muted" hidden>Generating first drill… (flex tier ~90s)</div>
-</section>
+</div>
+
+<!-- Settings tab -->
+<div id="tab-settings" data-tab="settings" hidden>
+  <section>
+    <h2>Steering instructions</h2>
+    <p class="muted" style="margin: 0 0 6px;">Free-text guidance prepended to every generation request.</p>
+    <textarea id="instructions" rows="3" placeholder="e.g. focus on ば conditionals; include cooking vocab"></textarea>
+  </section>
+
+  <section>
+    <h2>Queue depth</h2>
+    <div class="row">
+      <span class="muted">When auto-generate is on, keep</span>
+      <input id="queue-target" type="number" min="1" max="20" step="1">
+      <span class="muted">cards ready.</span>
+    </div>
+  </section>
+
+  <section id="file-controls-section" hidden>
+    <h2>File</h2>
+    <p class="muted" style="margin: 0 0 6px;">Currently: <code id="current-file-name"></code></p>
+    <div class="row">
+      <button id="settings-forget-btn">Forget &amp; pick another…</button>
+      <button id="settings-download-btn" hidden>Download .sqlite</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>OpenAI API key</h2>
+    <p class="muted" style="margin: 0 0 6px;">Stored in your .sqlite file. Clearing this field removes it.</p>
+    <div class="row">
+      <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" style="flex:1; min-width: 220px;">
+      <button id="api-key-show" type="button">Show</button>
+    </div>
+  </section>
+</div>
 
 <section id="stats-section" hidden>
   <details>
@@ -2404,13 +2503,14 @@ CREATE TABLE IF NOT EXISTS history (
 PRAGMA user_version = 1;
 `;
   var DEFAULT_SETTINGS = {
-    model: "gpt-5",
+    model: "gpt-5.4",
     service_tier: "flex",
     temperature: "1",
     grammar_sample_size: "2",
     vocab_sample_size: "10",
     queue_target: "5",
-    instructions: ""
+    instructions: "",
+    auto_generate: "0"
   };
   var DrillDb = class _DrillDb {
     constructor(db2) {
@@ -2434,6 +2534,21 @@ PRAGMA user_version = 1;
         this.db.exec(SCHEMA_V1);
         this._seedDefaults();
         this.dirty = true;
+      }
+      if (this.getSetting("model", "") === "gpt-5") {
+        this.setSetting("model", "gpt-5.4");
+      }
+      for (const [k, dv] of Object.entries(DEFAULT_SETTINGS)) {
+        if (!this._hasSetting(k)) this.setSetting(k, dv);
+      }
+    }
+    _hasSetting(key) {
+      const stmt = this.db.prepare("SELECT 1 FROM settings WHERE key = ?");
+      try {
+        stmt.bind([key]);
+        return stmt.step();
+      } finally {
+        stmt.free();
       }
     }
     userVersion() {
@@ -2961,8 +3076,9 @@ PRAGMA user_version = 1;
   var cards = [];
   async function boot() {
     show("file-section", true);
-    show("settings-section", false);
-    show("drill-area", false);
+    show("tabs", false);
+    show("tab-revision", false);
+    show("tab-settings", false);
     show("stats-section", false);
     const VOCAB2 = JSON.parse($("vocab").textContent || "[]");
     const GRAMMAR2 = JSON.parse($("grammar").textContent || "[]");
@@ -2972,7 +3088,9 @@ PRAGMA user_version = 1;
       getSettingFn: (key, def) => db ? db.getSetting(key, def) : def
     });
     wireFileSection();
-    wireSettingsSection();
+    wireTabs();
+    wireControls();
+    wireSettings();
     wireUnloadFlush();
     const forceMem = new URLSearchParams(location.search).get("mem") === "1";
     if (forceMem || !isSupported()) {
@@ -2981,6 +3099,20 @@ PRAGMA user_version = 1;
     }
     storage = await FileStorage.restore();
     await renderFileSection();
+  }
+  function wireTabs() {
+    document.querySelectorAll('[role="tab"]').forEach((btn) => {
+      btn.addEventListener("click", () => switchTab(btn.dataset.tabTarget));
+    });
+  }
+  function switchTab(target) {
+    document.querySelectorAll('[role="tab"]').forEach((b) => {
+      b.setAttribute("aria-selected", b.dataset.tabTarget === target ? "true" : "false");
+    });
+    document.querySelectorAll("[data-tab]").forEach((s) => {
+      if (s.dataset.tab === target) s.removeAttribute("hidden");
+      else s.setAttribute("hidden", "");
+    });
   }
   function wireFileSection() {
     $("file-open-btn").addEventListener("click", async () => {
@@ -3032,21 +3164,26 @@ PRAGMA user_version = 1;
       await openInMemoryDb(null);
     });
     const download = $("file-download-btn");
-    if (download) {
-      download.addEventListener("click", () => {
-        if (!db) return;
-        const bytes = db.exportBytes();
-        const blob = new Blob([bytes], { type: "application/vnd.sqlite3" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "n4-drill.sqlite";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(() => URL.revokeObjectURL(url), 1e3);
-      });
-    }
+    if (download) download.addEventListener("click", downloadDb);
+    $("settings-forget-btn").addEventListener("click", async () => {
+      if (!storage) return;
+      await storage.forget();
+      location.reload();
+    });
+    $("settings-download-btn").addEventListener("click", downloadDb);
+  }
+  function downloadDb() {
+    if (!db) return;
+    const bytes = db.exportBytes();
+    const blob = new Blob([bytes], { type: "application/vnd.sqlite3" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "n4-drill.sqlite";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1e3);
   }
   async function renderFileSection() {
     show("file-fsaa-pick", false);
@@ -3090,25 +3227,33 @@ PRAGMA user_version = 1;
   async function openInMemoryDb(bytes) {
     setStatus("Loading database (in-memory)\u2026");
     db = await DrillDb.open(bytes);
-    show("file-download-btn", true);
+    show("settings-download-btn", true);
     setStatus("In-memory database ready. Use Download to save.");
     enterAppMode();
   }
   function enterAppMode() {
     show("file-section", false);
-    show("settings-section", true);
-    show("drill-area", true);
+    show("tabs", true);
     show("stats-section", true);
-    $("api-key").value = db.getSetting("api_key", "");
-    $("instructions").value = db.getSetting("instructions", "");
+    switchTab("revision");
+    hydrateControlsFromDb();
+    if (storage && storage.name) {
+      $("current-file-name").textContent = storage.name;
+      show("file-controls-section", true);
+      show("settings-forget-btn", true);
+      show("settings-download-btn", false);
+    } else {
+      show("file-controls-section", true);
+      $("current-file-name").textContent = "in-memory session";
+      show("settings-forget-btn", false);
+      show("settings-download-btn", true);
+    }
     const savedKey = db.getSetting("api_key", "");
     if (savedKey) {
       setApiKey(savedKey);
       onKeyAvailable();
     } else {
-      setStatus("Enter your OpenAI API key in the settings field to start drilling.");
-      $("empty-hint").textContent = "Enter your API key above to begin.";
-      show("empty-hint", true);
+      setStatus("Add your OpenAI API key in Settings to begin.");
     }
     window.__app = {
       db,
@@ -3121,10 +3266,66 @@ PRAGMA user_version = 1;
       }
     };
     refreshStats();
+    updateEmptyHint();
+    updateQueueStatus();
   }
-  function wireSettingsSection() {
+  function onKeyAvailable() {
+    const s = stats();
+    setStatus(`Ready. Vocab: ${s.vocab} \xB7 Grammar: ${s.grammar} (${s.grammarTotal - s.grammar} unverified excluded).`);
+    refillQueue();
+    updateEmptyHint();
+  }
+  function hydrateControlsFromDb() {
+    const tier = db.getSetting("service_tier", "flex");
+    const tierRadio = document.querySelector(`#tier-seg input[value="${tier}"]`);
+    if (tierRadio) tierRadio.checked = true;
+    const model = db.getSetting("model", "gpt-5.4");
+    let modelRadio = document.querySelector(`#model-seg input[value="${model}"]`);
+    if (!modelRadio) {
+      modelRadio = document.querySelector('#model-seg input[value="gpt-5.4"]');
+    }
+    if (modelRadio) modelRadio.checked = true;
+    const auto = db.getSetting("auto_generate", "0") === "1";
+    $("auto-gen-toggle").checked = auto;
+    $("queue-target").value = db.getSetting("queue_target", "5");
+    $("instructions").value = db.getSetting("instructions", "");
+    $("api-key").value = db.getSetting("api_key", "");
+  }
+  function wireControls() {
+    document.querySelectorAll("#tier-seg input").forEach((r) => {
+      r.addEventListener("change", () => {
+        if (r.checked && db) db.setSetting("service_tier", r.value);
+      });
+    });
+    document.querySelectorAll("#model-seg input").forEach((r) => {
+      r.addEventListener("change", () => {
+        if (r.checked && db) db.setSetting("model", r.value);
+      });
+    });
+    $("auto-gen-toggle").addEventListener("change", function() {
+      if (!db) return;
+      db.setSetting("auto_generate", this.checked ? "1" : "0");
+      if (this.checked && hasApiKey()) refillQueue();
+      updateEmptyHint();
+    });
+    $("generate-one-btn").addEventListener("click", () => {
+      if (!hasApiKey()) {
+        setStatus("Add your API key in Settings first.");
+        return;
+      }
+      kickOffOneGeneration();
+    });
+  }
+  function wireSettings() {
     $("instructions").addEventListener("blur", function() {
       if (db) db.setSetting("instructions", this.value);
+    });
+    $("queue-target").addEventListener("change", function() {
+      if (!db) return;
+      const v = Math.max(1, Math.min(20, parseInt(this.value, 10) || 5));
+      this.value = String(v);
+      db.setSetting("queue_target", String(v));
+      if (hasApiKey()) refillQueue();
     });
     const keyEl = $("api-key");
     keyEl.addEventListener("blur", function() {
@@ -3139,6 +3340,7 @@ PRAGMA user_version = 1;
       } else {
         setApiKey(null);
         setStatus("API key cleared. Add a key to resume drilling.");
+        updateEmptyHint();
       }
     });
     keyEl.addEventListener("keydown", function(e) {
@@ -3154,12 +3356,6 @@ PRAGMA user_version = 1;
         this.textContent = "Show";
       }
     });
-  }
-  function onKeyAvailable() {
-    const s = stats();
-    setStatus(`Ready. Vocab: ${s.vocab} \xB7 Grammar: ${s.grammar} (${s.grammarTotal - s.grammar} unverified excluded).`);
-    refillQueue();
-    updateEmptyHint();
   }
   var Card = class {
     constructor(drill) {
@@ -3217,6 +3413,26 @@ PRAGMA user_version = 1;
       });
       return el;
     }
+    _setState(state) {
+      this.state = state;
+      if (state === "fresh") {
+        this.el.dataset.state = "fresh";
+        this._statePill.className = "pill fresh";
+        this._statePill.textContent = "fresh";
+      } else if (state === "grading") {
+        this.el.dataset.state = "grading";
+        this._statePill.className = "pill grading";
+        this._statePill.textContent = "grading\u2026";
+      } else if (state === "graded-pass") {
+        this.el.dataset.state = "graded-pass";
+        this._statePill.className = "pill pass";
+        this._statePill.textContent = "\u2713 pass";
+      } else if (state === "graded-fail") {
+        this.el.dataset.state = "graded-fail";
+        this._statePill.className = "pill fail";
+        this._statePill.textContent = "\u2717 miss";
+      }
+    }
     _renderJudgePanel() {
       const actions = this.el.querySelector(".card-actions");
       if (!actions) return;
@@ -3244,25 +3460,6 @@ PRAGMA user_version = 1;
         pill.textContent = `judge ${i + 1} \u2717`;
       }
     }
-    _setState(state) {
-      this.state = state;
-      this.el.dataset.state = state;
-      if (state === "fresh") {
-        this._statePill.className = "pill fresh";
-        this._statePill.textContent = "fresh";
-      } else if (state === "grading") {
-        this._statePill.className = "pill grading";
-        this._statePill.textContent = "grading\u2026";
-      } else if (state === "graded-pass" || state === "graded" && this.passed) {
-        this._statePill.className = "pill pass";
-        this._statePill.textContent = "\u2713 pass";
-        this.el.dataset.state = "graded-pass";
-      } else if (state === "graded-fail" || state === "graded" && !this.passed) {
-        this._statePill.className = "pill fail";
-        this._statePill.textContent = "\u2717 miss";
-        this.el.dataset.state = "graded-fail";
-      }
-    }
     async startGrade() {
       if (this.state !== "fresh") return;
       const v = (this._answerEl.value || "").trim();
@@ -3286,8 +3483,6 @@ PRAGMA user_version = 1;
         persistHistory(this.drill, this.answer, passed, verdicts);
         this._renderReveal();
         this._setState(passed ? "graded-pass" : "graded-fail");
-        this._gradeBtn.remove();
-        this._skipBtn.remove();
         refreshStats();
         updateQueueStatus();
       } catch (e) {
@@ -3307,7 +3502,7 @@ PRAGMA user_version = 1;
       const idx = cards.indexOf(this);
       if (idx >= 0) cards.splice(idx, 1);
       this.el.remove();
-      refillQueue();
+      if (db && db.getSetting("auto_generate", "0") === "1") refillQueue();
       updateQueueStatus();
       updateEmptyHint();
     }
@@ -3359,7 +3554,14 @@ PRAGMA user_version = 1;
     if (!hint) return;
     if (!hasApiKey()) {
       hint.hidden = false;
-      hint.textContent = "Enter your API key above to begin.";
+      hint.textContent = "Add your API key in Settings to begin.";
+      return;
+    }
+    const autoOn = db && db.getSetting("auto_generate", "0") === "1";
+    const hasCards = cards.length > 0 || inflight > 0;
+    if (!hasCards && !autoOn) {
+      hint.hidden = false;
+      hint.textContent = "Press \u201CGenerate next\u201D to create a drill. Toggle Auto-gen on if you'd rather have a steady queue.";
       return;
     }
     hint.hidden = true;
@@ -3389,29 +3591,36 @@ PRAGMA user_version = 1;
       if (firstFresh) firstFresh._answerEl.focus();
     }
   }
-  function refillQueue() {
+  function kickOffOneGeneration() {
     if (!hasApiKey() || !db) return;
-    const target = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
-    while (freshOrGradingCount() + inflight < target) {
-      inflight++;
-      const ghost = createGhost();
+    inflight++;
+    const ghost = createGhost();
+    updateQueueStatus();
+    updateEmptyHint();
+    generateAndApprove().then((drill) => {
+      if (drill) replaceGhostWithCard(ghost, drill);
+      else ghost.remove();
+    }).catch((err) => {
+      if (!err.skip) console.error("[prefetch]", err);
+      ghost.remove();
+    }).finally(() => {
+      inflight--;
       updateQueueStatus();
       updateEmptyHint();
-      generateAndApprove().then((drill) => {
-        if (drill) replaceGhostWithCard(ghost, drill);
-        else ghost.remove();
-      }).catch((err) => {
-        if (!err.skip) console.error("[prefetch]", err);
-        ghost.remove();
-      }).finally(() => {
-        inflight--;
-        updateQueueStatus();
-        updateEmptyHint();
-        const t2 = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
-        if (hasApiKey() && freshOrGradingCount() + inflight < t2) {
+      if (db.getSetting("auto_generate", "0") === "1") {
+        const t = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
+        if (hasApiKey() && freshOrGradingCount() + inflight < t) {
           setTimeout(refillQueue, 50);
         }
-      });
+      }
+    });
+  }
+  function refillQueue() {
+    if (!hasApiKey() || !db) return;
+    if (db.getSetting("auto_generate", "0") !== "1") return;
+    const target = Math.max(1, parseInt(db.getSetting("queue_target", "5"), 10));
+    while (freshOrGradingCount() + inflight < target) {
+      kickOffOneGeneration();
     }
   }
   async function generateAndApprove() {
