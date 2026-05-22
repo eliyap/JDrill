@@ -1,7 +1,14 @@
-// Prompt construction + OpenAI calls + drill-cycle helpers. The SYSTEM_PROMPT
-// is built once at module load from VOCAB and GRAMMAR — it must remain
-// byte-identical across all calls in a session for OpenAI's automatic prompt
-// cache (≥1024-token prefixes) to take effect.
+// Prompt construction + OpenAI calls + drill-cycle helpers.
+//
+// The SYSTEM_PROMPT is task-rules only — no corpus dump. The full vocab +
+// grammar deck used to be inlined here as a cache anchor, but:
+//   - The model is forbidden by the generation rule from using anything
+//     outside the sampled candidates, so the full deck never influenced
+//     output quality.
+//   - Cache TTL is short (~5 min); cold starts paid full 30K-token price.
+//   - The shrunken prefix (~1K tokens) is below OpenAI's cache threshold,
+//     so we forgo caching in exchange for 30x smaller per-call payload.
+// Candidates are passed per-call in the user message instead.
 
 let VOCAB = [];
 let GRAMMAR_ALL = [];
@@ -33,15 +40,6 @@ function buildSystemPrompt() {
     "  - \"grade\": judge a user's typed answer against the drill's reference answer.",
     "",
     "Always respond with JSON conforming to the schema attached to the request.",
-    "",
-    "## Familiar vocabulary",
-    "The learner has studied these vocabulary items in their Mochi deck:",
-    JSON.stringify(VOCAB),
-    "",
-    "## Reference grammar examples",
-    "Each item below is an English/Japanese sentence pair from the learner's deck.",
-    "Each pair exemplifies a specific N4 grammar pattern. Refer to a pair by its id.",
-    JSON.stringify(GRAMMAR),
     "",
     "## Generation rules",
     "When the task is \"generate\":",

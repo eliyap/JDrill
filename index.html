@@ -2853,15 +2853,6 @@ PRAGMA user_version = 1;
       "",
       "Always respond with JSON conforming to the schema attached to the request.",
       "",
-      "## Familiar vocabulary",
-      "The learner has studied these vocabulary items in their Mochi deck:",
-      JSON.stringify(VOCAB),
-      "",
-      "## Reference grammar examples",
-      "Each item below is an English/Japanese sentence pair from the learner's deck.",
-      "Each pair exemplifies a specific N4 grammar pattern. Refer to a pair by its id.",
-      JSON.stringify(GRAMMAR),
-      "",
       "## Generation rules",
       'When the task is "generate":',
       "  - The user message includes `grammar_candidates` (a small sampled subset of the reference grammar examples) and `vocab_candidates` (a sampled subset of the familiar vocabulary).",
@@ -3672,9 +3663,8 @@ PRAGMA user_version = 1;
   }
   async function generateAndApprove() {
     const drill = await generateDrill();
-    const { passed, verdicts } = await approveDrill(drill);
+    const { passed } = await approveDrill(drill);
     if (!passed) return null;
-    drill._approval = verdicts;
     return drill;
   }
   function persistHistory(drill, userAnswer, passed, verdicts) {

@@ -685,9 +685,8 @@ function refillQueue() {
 
 async function generateAndApprove() {
   const drill = await generateDrill();
-  const { passed, verdicts } = await approveDrill(drill);
+  const { passed } = await approveDrill(drill);
   if (!passed) return null;
-  drill._approval = verdicts;
   return drill;
 }
 

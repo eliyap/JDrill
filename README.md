@@ -131,20 +131,23 @@ index.html          # final shipped artifact
    in place, showing verdict, reference, judge reasoning, and target
    grammar pill. The card stays in the stack as a record of this session.
 
-## Prompt caching
+## Prompt strategy
 
-Every call shares a byte-identical system message:
+The system message is **task rules only** (~1 KB). The full vocab and
+grammar decks are *not* shipped in the system prompt — the runtime samples
+a small subset per call and embeds it directly in the user message.
 
-- the full vocab JSON (currently 4 items)
-- the full grammar JSON (currently 138 items, of which 17 `unverified` are
-  filtered at runtime — caller sees 121)
-- the structured-output rules
-- a small set of canonical task descriptions
+Why not a fat cached prefix? The generator rule already forbids the model
+from picking outside the offered candidates, so the rest of the deck adds
+nothing to output quality. It used to be there as a cache anchor (~30K
+tokens, dropping to 1/10th price after the first call), but OpenAI's cache
+TTL is short — every cold start paid the full uncached price for content
+the model couldn't even use. Trimming dropped per-call payload ~30x.
 
-Only the short variable tail (current task + payload) changes per call.
-OpenAI's automatic prompt cache kicks in on prefixes ≥1024 tokens; on v1 we
-measured ~97% cache hit after warm-up. Per-drill cost: ~$0.02-0.05 across 7
-calls (1 generate + 3 approve + 3 grade).
+Per drill cycle (1 generate + 3 approve + 3 grade = 7 calls):
+- **nano**: well under a cent
+- **mini**: a few cents
+- **full (gpt-5.4)**: ~$0.05-0.10 depending on output length
 
 ## Privacy / security
 
