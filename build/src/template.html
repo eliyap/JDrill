@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>N4 Drill</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --gap: 12px;
+    --fg: #1a1a1a;
+    --muted: #666;
+    --bg: #fafafa;
+    --card: #ffffff;
+    --border: #ddd;
+    --accent: #3a6ea5;
+    --pass: #2a7a3a;
+    --fail: #a23a3a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#eee; --muted:#aaa; --bg:#111; --card:#1c1c1c; --border:#333; --accent:#7fa9d7; --pass:#7dd58e; --fail:#e89595; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: var(--fg);
+    background: var(--bg);
+    margin: 0;
+    padding: var(--gap);
+    max-width: 760px;
+    margin-inline: auto;
+  }
+  h1 { font-size: 18px; margin: 4px 0 12px; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: var(--gap); }
+  textarea, input[type=password], input[type=text], input[type=file] {
+    width: 100%; font: inherit; padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: inherit;
+  }
+  textarea { min-height: 80px; resize: vertical; }
+  textarea[lang="ja"] { font-size: 19px; line-height: 1.5; }
+  button { font: inherit; padding: 8px 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: inherit; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+  .row { display: flex; gap: var(--gap); align-items: center; flex-wrap: wrap; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .prompt-en { font-size: 18px; margin: 8px 0 14px; }
+  #status-line { font-size: 13px; color: var(--muted); white-space: pre-wrap; }
+  [hidden] { display: none !important; }
+  .verdict-pass { color: var(--pass); font-weight: 600; }
+  .verdict-fail { color: var(--fail); font-weight: 600; }
+  .drill-entry { border-top: 1px dashed var(--border); padding: 8px 0; font-size: 13px; }
+  .drill-entry .meta { color: var(--muted); }
+  .drill-entry .prompt, .drill-entry .reference, .drill-entry .user-answer { margin: 2px 0; }
+  details summary { cursor: pointer; user-select: none; }
+  .judges { margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .judges .j { margin: 2px 0; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); font-size: 12px; margin-right: 4px; }
+  .pill.pass { color: var(--pass); }
+  .pill.fail { color: var(--fail); }
+  .ref-jp { font-size: 19px; }
+  .file-row { margin: 8px 0; }
+</style>
+</head>
+<body>
+
+<!-- Inline corpus. Stable across builds; this is the prompt-cache prefix. -->
+<script type="application/json" id="vocab">{{VOCAB_JSON}}</script>
+<script type="application/json" id="grammar">{{GRAMMAR_JSON}}</script>
+
+<h1>N4 Grammar Drill</h1>
+<div id="status-line">Loading…</div>
+
+<section id="file-section">
+  <div id="file-fsaa-pick" hidden>
+    <p><strong>Choose where drill history is stored.</strong> The .sqlite file lives in your iCloud Drive; the app keeps the file in sync as you study.</p>
+    <div class="row">
+      <button id="file-open-btn" class="primary">Open existing .sqlite…</button>
+      <button id="file-create-btn">Create new .sqlite…</button>
+    </div>
+    <p class="muted">First-time setup: pick a folder in iCloud Drive and choose a filename. After that, this browser remembers it.</p>
+  </div>
+
+  <div id="file-fsaa-reconnect" hidden>
+    <p><strong>Reconnect to your file.</strong></p>
+    <p>Last used: <code id="file-reconnect-name"></code></p>
+    <div class="row">
+      <button id="file-reconnect-btn" class="primary">Reconnect</button>
+      <button id="file-forget-btn">Forget &amp; pick another…</button>
+    </div>
+    <p class="muted">Chrome requires a click after each launch to re-grant write permission to the file.</p>
+  </div>
+
+  <div id="file-fallback" hidden>
+    <p><strong>This browser can't autosave to a file.</strong> Use the upload/download path instead.</p>
+    <div class="file-row">
+      <label class="muted">Open existing .sqlite:</label>
+      <input id="file-upload" type="file" accept=".sqlite,.sqlite3,.db,application/vnd.sqlite3">
+    </div>
+    <div class="row">
+      <button id="file-new-mem-btn">Start fresh (in memory)</button>
+      <button id="file-download-btn" hidden>Download .sqlite</button>
+    </div>
+    <p class="muted">Drill history lives in this tab only. Use Download to save before closing.</p>
+  </div>
+</section>
+
+<section id="key-section" hidden>
+  <p><strong>Enter your OpenAI API key.</strong> Held in memory only; never written to disk.</p>
+  <div class="row">
+    <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-…" style="flex:1; min-width: 220px;">
+    <button id="key-submit" class="primary">Start</button>
+  </div>
+  <p class="muted">Tip: paste your key once per launch. Closing the tab discards it.</p>
+</section>
+
+<section id="settings-section" hidden>
+  <label for="instructions" class="muted">Optional steering instructions (kept across launches):</label>
+  <textarea id="instructions" rows="2" placeholder="e.g. focus on ば conditionals; include cooking vocab"></textarea>
+</section>
+
+<section id="drill-card" hidden>
+  <div class="muted">Translate to Japanese:</div>
+  <div class="prompt-en" id="prompt-en"></div>
+  <textarea id="user-answer" lang="ja" placeholder="日本語で…" autocomplete="off" spellcheck="false"></textarea>
+  <div class="row" style="margin-top:8px;">
+    <button id="grade-btn" class="primary">Grade</button>
+    <button id="skip-btn">Skip</button>
+    <span id="queue-status" class="muted"></span>
+  </div>
+</section>
+
+<section id="reveal-panel" hidden>
+  <div class="row">
+    <span id="verdict-label"></span>
+    <span class="pill" id="target-grammar-pill"></span>
+  </div>
+  <div class="ref-jp" id="reference-jp"></div>
+  <div class="muted" id="drill-notes"></div>
+  <div class="judges" id="judges"></div>
+  <div class="row" style="margin-top:10px;">
+    <button id="next-btn" class="primary">Next drill</button>
+  </div>
+</section>
+
+<section id="stats-section" hidden>
+  <details>
+    <summary><span id="stats-summary">History</span></summary>
+    <div id="history-view"></div>
+  </details>
+</section>
+
+<script>
+/*__BUNDLE__*/
+</script>
+</body>
+</html>

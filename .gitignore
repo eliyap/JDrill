@@ -1,0 +1,14 @@
+# Build artifacts (re-derived from sources)
+build/dist/
+build/vocab.json
+build/grammar.json
+
+# Node toolchain
+build/node_modules/
+# package-lock.json is kept — pins toolchain (esbuild / sql.js) for reproducible builds.
+
+# macOS
+.DS_Store
+
+# Local secrets
+.env

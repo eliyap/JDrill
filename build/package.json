@@ -1,0 +1,12 @@
+{
+  "name": "n4-drill-build",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build pipeline for the inlined n4-drill.html. Run `python3 build.py` from this directory.",
+  "dependencies": {
+    "sql.js": "^1.10.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}
