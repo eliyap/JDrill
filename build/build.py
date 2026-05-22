@@ -52,8 +52,8 @@ def bundle_js() -> str:
         "--platform=browser",
         "--target=es2022",
         "--loader:.wasm=base64",
+        "--minify",
         f"--outfile={OUT_BUNDLE}",
-        # No minify — readability matters when debugging in devtools.
     ], cwd=HERE)
     return OUT_BUNDLE.read_text(encoding="utf-8")
 
