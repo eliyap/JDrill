@@ -215,13 +215,39 @@ function App() {
   }
 
   function skipCard(id) {
-    // Trash icon-btn — discard without recording history. (Earlier UX
-    // had a separate "I have no idea" reveal button that recorded a fail;
-    // now the peel sticker covers the visual reveal and the trash discards.
-    // Users who peeked can still type the answer and submit if they want.)
+    // Trash icon-btn — discard without recording history.
     const card = cardsRef.current.find(c => c.id === id);
     if (card?.pendingId) dbRef.current?.deletePending(card.pendingId);
     dispatch({ type: "remove", id });
+  }
+
+  function revealCard(id, typedAnswer) {
+    // Peel sticker click ("I have no idea") — mark the drill as a fail
+    // without spending grading tokens, log it to history, and let the queue
+    // refill. Without this, clicking the peel was a CSS-only animation and
+    // the card stayed in the "fresh" slot forever, blocking shouldRefill.
+    const card = cardsRef.current.find(c => c.id === id);
+    if (!card || card.state !== "fresh" || !dbRef.current) return;
+    const verdicts = [0, 1, 2].map(() => ({
+      verdict: "no", reason: "user revealed without answering — no LLM call",
+    }));
+    const answer = (typedAnswer || "").trim();
+    dbRef.current.insertHistory({
+      ts: Date.now(),
+      prompt_en: card.drill.prompt_en,
+      reference_jp: card.drill.reference_jp,
+      target_grammar_id: card.drill.target_grammar_id,
+      target_grammar_label: card.drill.target_grammar_label,
+      notes: card.drill.notes,
+      user_answer: answer,
+      verdict: "fail",
+      judges_json: JSON.stringify(verdicts),
+    });
+    dbRef.current.deletePending(card.pendingId);
+    dispatch({ type: "update", id, patch: {
+      state: "graded-fail", verdicts, passed: false, answer,
+    }});
+    setCounts(dbRef.current.historyCounts());
   }
 
   function updateSetting(key, value) {
@@ -352,6 +378,7 @@ function App() {
         inflight=${inflight}
         onGrade=${startGrade}
         onSkip=${skipCard}
+        onReveal=${revealCard}
       />`}
       ${tab === "settings" && html`<${SettingsTab}
         settings=${settings}
@@ -423,7 +450,7 @@ function Tabs({ active, onSwitch }) {
 
 // -- Revision tab + cards ----------------------------------------------------
 
-function RevisionTab({ settings, onSetting, onGenerate, cards, inflight, onGrade, onSkip }) {
+function RevisionTab({ settings, onSetting, onGenerate, cards, inflight, onGrade, onSkip, onReveal }) {
   const autoOn = settings.auto_generate === "1";
   const showKeyHint = !hasApiKey();
 
@@ -448,7 +475,7 @@ function RevisionTab({ settings, onSetting, onGenerate, cards, inflight, onGrade
     </section>
 
     <div id="cards-stack">
-      ${cards.map(c => html`<${Card} key=${c.id} card=${c} onGrade=${onGrade} onSkip=${onSkip} />`)}
+      ${cards.map(c => html`<${Card} key=${c.id} card=${c} onGrade=${onGrade} onSkip=${onSkip} onReveal=${onReveal} />`)}
       ${Array.from({ length: inflight }, (_, i) => html`<${Ghost} key=${"ghost-" + i} />`)}
     </div>
 
@@ -491,7 +518,7 @@ function SubmitIconBtn({ onClick }) {
   `;
 }
 
-function Card({ card, onGrade, onSkip }) {
+function Card({ card, onGrade, onSkip, onReveal }) {
   // Uncontrolled while fresh — avoids re-rendering on every keystroke and
   // lets event handlers read e.target.value synchronously. When the card
   // transitions out of `fresh`, we re-render with a controlled value (the
@@ -506,6 +533,11 @@ function Card({ card, onGrade, onSkip }) {
   const onKeyDown = (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
   };
+  // Click peel = "I have no idea": reveal the reference, mark this drill as
+  // a fail (no LLM call), and free the slot so the queue refills. Without a
+  // state dispatch here the card stays "fresh" forever and shouldRefill never
+  // flips — the peel needs to be more than a CSS class toggle.
+  const onPeelClick = () => onReveal(card.id, textRef.current?.value || "");
 
   return html`
     <article class="card" data-state=${ds}>
@@ -517,7 +549,7 @@ function Card({ card, onGrade, onSkip }) {
       <div class="model-answer">
         <div class="ref-jp"><${RubyText} text=${card.drill.reference_jp} /></div>
         ${fresh && html`
-          <span class="peel" onClick=${(e) => e.currentTarget.classList.toggle("peeled")}></span>
+          <span class="peel" onClick=${onPeelClick}></span>
           <span class="peel-fold"></span>
         `}
       </div>

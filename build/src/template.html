@@ -150,10 +150,10 @@
      the answer-input's right edge (input flex + 12px gap + ~28px button). */
   .model-answer:has(.peel) { margin-right: 40px; }
 
-  /* Peel-off sticker — purely visual reveal hint. Rest: full coverage.
-     Hover: lift only a tiny corner notch as an affordance for "click to lift".
-     Click: fully peeled (instant). Click again: re-cover (instant).
-     Hover is suppressed when peeled so a stuck cursor doesn't re-cover the answer. */
+  /* Peel-off sticker — covers the model answer on a fresh card.
+     Rest: full coverage. Hover: lift a tiny corner notch as a "click to peel"
+     affordance. Click: dispatches reveal (mark wrong, no LLM); the article
+     transitions to graded-fail, removing the peel element entirely. */
   .peel {
     position: absolute;
     inset: -2px 0;
@@ -165,15 +165,11 @@
     clip-path: polygon(0 0, 100% 0, 100% 100%, 0 100%, 0 100%);
     transition: clip-path 0.4s cubic-bezier(0.3, 0.7, 0.3, 1);
   }
-  .model-answer:hover .peel:not(.peeled) {
+  .model-answer:hover .peel {
     clip-path: polygon(0 0, 100% 0, 100% 100%, 16px 100%, 0 calc(100% - 12px));
   }
-  .peel.peeled {
-    clip-path: polygon(100% 0, 100% 0, 100% 100%, 100% 100%, 100% 0);
-    transition: none;
-  }
 
-  /* Folded-over corner — the back of the sticker visible at the peel. */
+  /* Folded-over corner — the back of the sticker visible at the lifted notch. */
   .peel-fold {
     position: absolute;
     inset: -2px 0;
@@ -190,7 +186,7 @@
     background: linear-gradient(135deg, rgba(255,255,255,0.10), transparent 40%);
     clip-path: inherit;
   }
-  .model-answer:hover .peel:not(.peeled) ~ .peel-fold {
+  .model-answer:hover .peel ~ .peel-fold {
     clip-path: polygon(16px 100%, 0 calc(100% - 12px), 12px calc(100% - 15px));
   }
 
