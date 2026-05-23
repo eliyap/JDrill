@@ -117,23 +117,38 @@ function App() {
   // transitions that free up slots. `cards.length` alone misses those.
   useEffect(() => {
     if (phase !== "ready") return;
-    if (shouldRefill({
+    const target = parseInt(settings.queue_target || "5", 10);
+    const decision = shouldRefill({
       cards,
       inflight,
       autoGenerate: settings.auto_generate === "1",
-      queueTarget: parseInt(settings.queue_target || "5", 10),
+      queueTarget: target,
       hasKey: hasApiKey(),
-    })) kickOffOne();
+    });
+    // Surface every refill decision so the user can confirm in devtools that
+    // the cards-changed → predicate-true → kickOff loop actually fires. The
+    // line is intentionally low-volume (one per cards/inflight change).
+    console.info("[refill]", {
+      decision,
+      ready: freshOrGradingCount(cards),
+      inflight,
+      target,
+      autoGenerate: settings.auto_generate === "1",
+      hasKey: hasApiKey(),
+    });
+    if (decision) kickOffOne();
   }, [phase, settings.auto_generate, settings.queue_target, cards, inflight]);
 
   // -- Imperative actions --
   async function kickOffOne() {
     if (!hasApiKey() || !dbRef.current) return;
     setInflight(n => n + 1);
+    const startedAt = Date.now();
     try {
       const drill = await generateDrill();
-      const { passed } = await approveDrill(drill);
-      if (passed) {
+      const approval = await approveDrill(drill);
+      const ms = Date.now() - startedAt;
+      if (approval.passed) {
         // Persist the approved drill before showing it. If the user closes
         // the tab before answering, the next launch picks it up via
         // listPending instead of paying for another generation.
@@ -144,9 +159,13 @@ function App() {
           judgeProgress: [null, null, null],
           verdicts: null, passed: null,
         }});
+        console.info(`[prefetch] +card in ${ms}ms (${drill.target_grammar_label})`);
+      } else {
+        console.info(`[prefetch] rejected by judges in ${ms}ms`);
       }
     } catch (err) {
-      if (!err.skip) console.error("[prefetch]", err);
+      if (err.skip) console.info("[prefetch] skipped:", err.message);
+      else console.error("[prefetch]", err);
     } finally {
       setInflight(n => n - 1);
     }
@@ -303,9 +322,23 @@ function App() {
     };
   }
 
+  // Derive a live queue suffix appended to the status line. The user needs to
+  // be able to see at-a-glance how many drills are ready vs generating without
+  // opening devtools — otherwise "the prefill is broken" turns into a guessing
+  // game between perception and the actual state of the queue.
+  function queueSuffix() {
+    if (phase !== "ready") return "";
+    const ready = cards.filter(c => c.state === "fresh").length;
+    const grading = cards.filter(c => c.state === "grading").length;
+    const parts = [ready + " ready"];
+    if (grading) parts.push(grading + " grading");
+    if (inflight) parts.push(inflight + " generating");
+    return " · " + parts.join(" · ");
+  }
+
   // -- Render --
   return html`
-    <div class="status-line">${status}</div>
+    <div class="status-line">${status}${queueSuffix()}</div>
     ${phase === "file-pick" && html`<${FilePickSection} onOpen=${fileOpen} onCreate=${fileCreate} />`}
     ${phase === "reconnect" && html`<${ReconnectSection} name=${storageRef.current?.name} onReconnect=${fileReconnect} onForget=${fileForget} />`}
     ${phase === "fallback" && html`<${FallbackSection} onUpload=${uploadInMemory} onNewMem=${startInMemory} />`}
