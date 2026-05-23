@@ -167,14 +167,16 @@ function App() {
     const card = cardsRef.current.find(c => c.id === id);
     if (!card || card.state !== "fresh" || !answer.trim()) return;
     dispatch({ type: "update", id, patch: {
-      state: "grading", answer: answer.trim(), judgeProgress: ["pending", "pending", "pending"],
+      state: "grading", answer: answer.trim(), judgeProgress: [null, null, null],
     }});
 
     try {
+      // Per-judge verdict objects flow in via callback; Reveal renders the
+      // rationale as soon as a row settles, and a shimmer skeleton while pending.
       const onJudge = (i, v) => {
         dispatch({ type: "update", id, patch: {
           judgeProgress: cardsRef.current.find(c => c.id === id).judgeProgress.map(
-            (jp, idx) => idx === i ? (v && v.verdict === "yes" ? "pass" : "fail") : jp
+            (jp, idx) => idx === i ? v : jp
           ),
         }});
       };
@@ -205,37 +207,13 @@ function App() {
   }
 
   function skipCard(id) {
+    // Trash icon-btn — discard without recording history. (Earlier UX
+    // had a separate "I have no idea" reveal button that recorded a fail;
+    // now the peel sticker covers the visual reveal and the trash discards.
+    // Users who peeked can still type the answer and submit if they want.)
     const card = cardsRef.current.find(c => c.id === id);
     if (card?.pendingId) dbRef.current?.deletePending(card.pendingId);
     dispatch({ type: "remove", id });
-  }
-
-  function revealCard(id, typedAnswer) {
-    // "I have no idea" path: record the drill as a fail without calling the
-    // grading panel. Whatever the user did type goes into history so the
-    // entry reflects the actual attempt instead of being blank.
-    const card = cardsRef.current.find(c => c.id === id);
-    if (!card || card.state !== "fresh" || !dbRef.current) return;
-    const verdicts = [0, 1, 2].map(() => ({
-      verdict: "no", reason: "user requested reveal — no LLM call",
-    }));
-    const answer = (typedAnswer || "").trim();
-    dbRef.current.insertHistory({
-      ts: Date.now(),
-      prompt_en: card.drill.prompt_en,
-      reference_jp: card.drill.reference_jp,
-      target_grammar_id: card.drill.target_grammar_id,
-      target_grammar_label: card.drill.target_grammar_label,
-      notes: card.drill.notes,
-      user_answer: answer,
-      verdict: "fail",
-      judges_json: JSON.stringify(verdicts),
-    });
-    dbRef.current.deletePending(card.pendingId);
-    dispatch({ type: "update", id, patch: {
-      state: "graded-fail", verdicts, passed: false, answer,
-    }});
-    setCounts(dbRef.current.historyCounts());
   }
 
   function updateSetting(key, value) {
@@ -352,7 +330,6 @@ function App() {
         inflight=${inflight}
         onGrade=${startGrade}
         onSkip=${skipCard}
-        onReveal=${revealCard}
       />`}
       ${tab === "settings" && html`<${SettingsTab}
         settings=${settings}
@@ -424,15 +401,9 @@ function Tabs({ active, onSwitch }) {
 
 // -- Revision tab + cards ----------------------------------------------------
 
-function RevisionTab({ settings, onSetting, onGenerate, cards, inflight, onGrade, onSkip, onReveal }) {
-  const fresh = cards.reduce((n, c) => n + (c.state === "fresh" ? 1 : 0), 0);
-  const grading = cards.reduce((n, c) => n + (c.state === "grading" ? 1 : 0), 0);
+function RevisionTab({ settings, onSetting, onGenerate, cards, inflight, onGrade, onSkip }) {
   const autoOn = settings.auto_generate === "1";
-  const ghostCount = inflight;
-  const showHint = !hasApiKey() || (cards.length === 0 && inflight === 0 && !autoOn);
-  const hintText = !hasApiKey()
-    ? "Add your API key in Settings to begin."
-    : "Press “Generate next” to create a drill. Toggle Auto-gen on if you'd rather have a steady queue.";
+  const showKeyHint = !hasApiKey();
 
   return html`
     <section>
@@ -451,90 +422,128 @@ function RevisionTab({ settings, onSetting, onGenerate, cards, inflight, onGrade
           <label><input type="radio" name="model" value="gpt-5.4" checked=${settings.model === "gpt-5.4"} onChange=${() => onSetting("model", "gpt-5.4")} />Full</label>
         </div>
       </div>
-      <div class="control-row">
-        <span class="label">Auto-gen</span>
+      ${showKeyHint && html`<div id="empty-hint" class="muted">Add your API key in Settings to begin.</div>`}
+    </section>
+
+    <div id="cards-stack">
+      ${cards.map(c => html`<${Card} key=${c.id} card=${c} onGrade=${onGrade} onSkip=${onSkip} />`)}
+      ${Array.from({ length: inflight }, (_, i) => html`<${Ghost} key=${"ghost-" + i} />`)}
+    </div>
+
+    <div class="controls-strip">
+      <button class="icon-btn accent generate-btn" id="generate-one-btn"
+        aria-label="Generate next" title="Generate next" onClick=${onGenerate}>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 3v10M3 8h10"/>
+        </svg>
+      </button>
+      <div class="auto-gen">
+        <span class="label glyph" title="Auto-generate the next card after grading">∞</span>
         <label class="toggle">
           <input type="checkbox" id="auto-gen-toggle" checked=${autoOn}
             onChange=${(e) => onSetting("auto_generate", e.target.checked ? "1" : "0")} />
           <span class="slider"></span>
         </label>
-        <button id="generate-one-btn" onClick=${onGenerate}>Generate next</button>
-        <span id="queue-status" class="muted">${fresh} ready${grading ? ` · ${grading} grading` : ""}</span>
       </div>
-      ${showHint && html`<div id="empty-hint" class="muted">${hintText}</div>`}
-    </section>
-
-    <div id="cards-stack">
-      ${cards.map(c => html`<${Card} key=${c.id} card=${c} onGrade=${onGrade} onSkip=${onSkip} onReveal=${onReveal} />`)}
-      ${Array.from({ length: ghostCount }, (_, i) => html`<${Ghost} key=${"ghost-" + i} />`)}
     </div>
   `;
 }
 
-function Card({ card, onGrade, onSkip, onReveal }) {
+function TrashIconBtn({ onClick }) {
+  return html`
+    <button class="icon-btn danger" aria-label="Discard card" title="Discard" onClick=${onClick}>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.2a1 1 0 0 0 1 .8h4.6a1 1 0 0 0 1-.8L12 4M6.5 7v4M9.5 7v4"/>
+      </svg>
+    </button>
+  `;
+}
+
+function SubmitIconBtn({ onClick }) {
+  return html`
+    <button class="icon-btn accent" aria-label="Grade" title="Grade (↵ or ⌘↵)" onClick=${onClick}>
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 3v4a2 2 0 0 1-2 2H3M6 6 3 9l3 3"/>
+      </svg>
+    </button>
+  `;
+}
+
+function Card({ card, onGrade, onSkip }) {
   // Uncontrolled while fresh — avoids re-rendering on every keystroke and
   // lets event handlers read e.target.value synchronously. When the card
   // transitions out of `fresh`, we re-render with a controlled value (the
   // submitted answer) and disable the input.
   const textRef = useRef(null);
   const ds = card.state;
-  const pill = stateLabel(ds);
+  const fresh = ds === "fresh";
   const submit = () => onGrade(card.id, textRef.current?.value || "");
+  const onKeyDown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submit(); }
+  };
 
   return html`
     <article class="card" data-state=${ds}>
-      <div class="card-state-row">
-        <span class=${"pill " + pill.cls}>${pill.label}</span>
+      <div class="card-prompt">
+        <span class="card-prompt-text">${card.drill.prompt_en}</span>
+        ${fresh && html`<${TrashIconBtn} onClick=${() => onSkip(card.id)} />`}
       </div>
-      <div class="card-prompt">${card.drill.prompt_en}</div>
-      ${ds === "fresh"
-        ? html`<textarea ref=${textRef} lang="ja" placeholder="日本語で…" autocomplete="off" spellcheck=${false}
-            onKeyDown=${(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit(); }} />`
-        : html`<textarea lang="ja" disabled value=${card.answer} />`}
-      ${ds === "fresh" && html`
-        <div class="card-actions">
-          <button class="primary" onClick=${submit}>Grade</button>
-          <button onClick=${() => onReveal(card.id, textRef.current?.value || "")} title="I have no idea — mark wrong and reveal">Reveal</button>
-          <button onClick=${() => onSkip(card.id)}>Skip</button>
-        </div>
-      `}
-      ${ds === "grading" && html`
-        <div class="card-judges-mini">
-          ${[0, 1, 2].map(i => html`<${JudgePill} state=${card.judgeProgress?.[i] || "pending"} index=${i} />`)}
-        </div>
-      `}
+
+      <div class="model-answer">
+        <div class="ref-jp"><${RubyText} text=${card.drill.reference_jp} /></div>
+        ${fresh && html`
+          <span class="peel" onClick=${(e) => e.currentTarget.classList.toggle("peeled")}></span>
+          <span class="peel-fold"></span>
+        `}
+      </div>
+
+      ${fresh
+        ? html`
+            <div class="answer-row">
+              <input ref=${textRef} class="answer-input" lang="ja" type="text"
+                placeholder="日本語で…" autocomplete="off" spellcheck=${false}
+                onKeyDown=${onKeyDown} />
+              <${SubmitIconBtn} onClick=${submit} />
+            </div>`
+        : html`<input class="answer-input" lang="ja" type="text" disabled value=${card.answer || ""} />`
+      }
+
       ${card.gradingError && html`<div class="muted" style="color: var(--fail);">Grading failed: ${card.gradingError}</div>`}
-      ${(ds === "graded-pass" || ds === "graded-fail") && html`<${Reveal} card=${card} />`}
+      ${(ds === "grading" || ds === "graded-pass" || ds === "graded-fail") && html`<${Reveal} card=${card} />`}
     </article>
   `;
 }
 
-function stateLabel(s) {
-  if (s === "fresh")        return { cls: "fresh",   label: "fresh" };
-  if (s === "grading")      return { cls: "grading", label: "grading…" };
-  if (s === "graded-pass")  return { cls: "pass",    label: "✓ pass" };
-  return { cls: "fail", label: "✗ miss" };
-}
-
-function JudgePill({ state, index }) {
-  const symbol = state === "pass" ? " ✓" : state === "fail" ? " ✗" : "";
-  return html`<span class=${"judge-pill " + (state || "pending")} data-judge=${index}>judge ${index + 1}${symbol}</span>`;
-}
-
 function Reveal({ card }) {
+  // Render the final verdicts when available, falling back to the per-judge
+  // progress (which contains verdict objects as each judge settles). This
+  // lets rationales appear progressively during grading.
+  const rows = card.verdicts || card.judgeProgress || [null, null, null];
   return html`
     <div class="card-reveal">
       <div class="row">
         <span class="pill">${card.drill.target_grammar_label || ""}</span>
       </div>
-      <div class="ref-jp"><${RubyText} text=${card.drill.reference_jp} /></div>
       ${card.drill.notes && html`<div class="muted">${card.drill.notes}</div>`}
       <div class="judges">
-        ${card.verdicts.map((v, i) => html`
-          <div class="j">
-            <span class=${"pill " + (v.verdict === "yes" ? "pass" : "fail")}>judge ${i + 1} · ${v.verdict}</span> ${v.reason}
-          </div>
-        `)}
+        ${rows.map((v, i) => {
+          if (!v) {
+            const shortCls = i % 2 === 1 ? " short" : "";
+            return html`
+              <div class="j reveal-judge pending" key=${i}>
+                <span class="verdict-mark" aria-label="grading"></span>
+                <span class=${"ghost-skel ghost-line" + shortCls}></span>
+              </div>
+            `;
+          }
+          const pass = v.verdict === "yes";
+          return html`
+            <div class="j reveal-judge" key=${i}>
+              <span class=${"verdict-mark " + (pass ? "pass" : "fail")} aria-label=${pass ? "pass" : "fail"}>${pass ? "✓" : "✕"}</span>
+              <span>${v.reason}</span>
+            </div>
+          `;
+        })}
       </div>
     </div>
   `;
@@ -558,11 +567,10 @@ function RubyText({ text }) {
 
 function Ghost() {
   return html`
-    <article class="card ghost">
-      <div class="card-state-row"><span class="pill grading">generating…</span></div>
+    <article class="card ghost" data-state="fresh">
       <div class="ghost-skel ghost-line"></div>
-      <div class="ghost-skel ghost-block"></div>
       <div class="ghost-skel ghost-line short"></div>
+      <div class="ghost-skel ghost-block"></div>
     </article>
   `;
 }
