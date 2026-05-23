@@ -19,7 +19,7 @@ import {
   gradeAnswer,
   stats as openAiStats,
 } from "./openai.js";
-import { shouldRefill, freshOrGradingCount, buildRubyAnnotator, renderRuby } from "./runtime.js";
+import { shouldRefill, freshOrGradingCount, buildRubyAnnotator, renderRuby, cardsReducer } from "./runtime.js";
 
 const VOCAB = JSON.parse(document.getElementById("vocab").textContent || "[]");
 const GRAMMAR = JSON.parse(document.getElementById("grammar").textContent || "[]");
@@ -27,17 +27,6 @@ const GRAMMAR = JSON.parse(document.getElementById("grammar").textContent || "[]
 // One-shot lookup table for furigana rendering. Built at module load
 // because vocab is immutable for the session.
 const RUBY = buildRubyAnnotator(VOCAB);
-
-// -- Reducer ------------------------------------------------------------------
-
-function cardsReducer(state, action) {
-  switch (action.type) {
-    case "add":    return [...state, action.card];
-    case "update": return state.map(c => c.id === action.id ? { ...c, ...action.patch } : c);
-    case "remove": return state.filter(c => c.id !== action.id);
-    default: return state;
-  }
-}
 
 let _nextCardId = 1;
 const cardId = () => "c" + (_nextCardId++);
@@ -478,8 +467,11 @@ function Card({ card, onGrade, onSkip }) {
   const ds = card.state;
   const fresh = ds === "fresh";
   const submit = () => onGrade(card.id, textRef.current?.value || "");
+  // Cmd/Ctrl + Enter submits. Bare Enter does nothing — IMEs need Enter to
+  // commit kana → kanji conversion and a plain-Enter submit would race the
+  // composition end.
   const onKeyDown = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); submit(); }
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit();
   };
 
   return html`

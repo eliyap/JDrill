@@ -127,6 +127,25 @@ function isKanjiChar(ch) {
 }
 
 /**
+ * Reducer used by the cards stack. Lives here so it's testable in isolation
+ * — that way we can wire a fake generator to it and prove the queue invariant
+ * (`shouldRefill` → kickOff → dispatch add) round-trips end-to-end without
+ * needing a real React renderer.
+ *
+ *   actions: { type: "add",    card }
+ *            { type: "update", id, patch }
+ *            { type: "remove", id }
+ */
+export function cardsReducer(state, action) {
+  switch (action.type) {
+    case "add":    return [...state, action.card];
+    case "update": return state.map(c => c.id === action.id ? { ...c, ...action.patch } : c);
+    case "remove": return state.filter(c => c.id !== action.id);
+    default: return state;
+  }
+}
+
+/**
  * Pick k random distinct elements from arr. Used to seed the candidate set
  * shown to the model per generation call.
  *

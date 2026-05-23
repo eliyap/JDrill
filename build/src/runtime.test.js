@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 
 import {
   shouldRefill, freshOrGradingCount, sample,
-  buildRubyAnnotator, renderRuby,
+  buildRubyAnnotator, renderRuby, cardsReducer,
 } from "./runtime.js";
 
 const BASE = { cards: [], inflight: 0, autoGenerate: true, queueTarget: 3, hasKey: true };
@@ -219,6 +219,90 @@ test("renderRuby: regression — the 高円寺 failure verbatim", () => {
   assert.ok(!rubied.includes("寺"), "寺 inside 高円寺 must NOT be annotated");
   assert.ok(rubied.includes("通"), "通り should still annotate");
   assert.ok(rubied.includes("静"), "静か should still annotate");
+});
+
+// -- Reducer + queue cycle ----------------------------------------------------
+//
+// These exercise the bit the predicate tests cannot: the full
+// "dispatch action → cards changes → shouldRefill flips → kickOff fires"
+// loop. The previous test suite only covered the predicate, so a wiring bug
+// in skipCard or in the reducer would have passed CI silently.
+
+test("cardsReducer: add appends, returns new array", () => {
+  const s0 = [];
+  const s1 = cardsReducer(s0, { type: "add", card: { id: "a", state: "fresh" } });
+  assert.notEqual(s1, s0, "must produce a new array (useEffect dep tracking)");
+  assert.equal(s1.length, 1);
+  assert.equal(s1[0].id, "a");
+});
+
+test("cardsReducer: remove drops the matching card", () => {
+  const s0 = [{ id: "a", state: "fresh" }, { id: "b", state: "fresh" }];
+  const s1 = cardsReducer(s0, { type: "remove", id: "a" });
+  assert.notEqual(s1, s0);
+  assert.equal(s1.length, 1);
+  assert.equal(s1[0].id, "b");
+});
+
+test("cardsReducer: update patches the matching card without touching siblings", () => {
+  const s0 = [{ id: "a", state: "fresh" }, { id: "b", state: "fresh" }];
+  const s1 = cardsReducer(s0, { type: "update", id: "a", patch: { state: "grading" } });
+  assert.notEqual(s1, s0);
+  assert.equal(s1[0].state, "grading");
+  assert.equal(s1[1], s0[1], "untouched cards keep reference equality");
+});
+
+test("queue cycle: skip a fresh card → shouldRefill flips true", () => {
+  // The regression we just shipped to the user: "skipping cards doesn't
+  // trigger a prefill". This test simulates the exact handler path:
+  // dispatch remove → recompute predicate.
+  let cards = [
+    { id: "a", state: "fresh" }, { id: "b", state: "fresh" }, { id: "c", state: "fresh" },
+  ];
+  const base = { inflight: 0, autoGenerate: true, queueTarget: 3, hasKey: true };
+  assert.equal(shouldRefill({ ...base, cards }), false, "full queue at target");
+
+  cards = cardsReducer(cards, { type: "remove", id: "a" });
+  assert.equal(shouldRefill({ ...base, cards }), true,
+    "after skip, predicate must allow refill");
+});
+
+test("queue cycle: grade-induced graded card → shouldRefill flips true", () => {
+  // The other half: when a card transitions fresh → grading → graded, the
+  // graded slot must reopen for refill. shouldRefill already had a unit test
+  // for this; this version walks the reducer so we catch any update-action
+  // misuse that loses array-reference identity.
+  let cards = [
+    { id: "a", state: "fresh" }, { id: "b", state: "fresh" }, { id: "c", state: "fresh" },
+  ];
+  const base = { inflight: 0, autoGenerate: true, queueTarget: 3, hasKey: true };
+
+  cards = cardsReducer(cards, { type: "update", id: "a", patch: { state: "grading" } });
+  assert.equal(shouldRefill({ ...base, cards }), false, "grading still holds the slot");
+
+  cards = cardsReducer(cards, { type: "update", id: "a", patch: { state: "graded-fail" } });
+  assert.equal(shouldRefill({ ...base, cards }), true, "graded card frees the slot");
+});
+
+test("queue cycle: drives the refill loop to target via a fake generator", () => {
+  // Stand in for the App: keep state, run shouldRefill, fire fake kickOffOne.
+  // Each fake "generation" produces a fresh card by adding to the stack.
+  // We run a small loop until the predicate stabilizes — exactly the same
+  // shape the React useEffect implements.
+  const base = { inflight: 0, autoGenerate: true, queueTarget: 3, hasKey: true };
+  let cards = [];
+  let _id = 0;
+  let safety = 0;
+  while (shouldRefill({ ...base, cards })) {
+    if (safety++ > 20) throw new Error("refill loop did not converge");
+    cards = cardsReducer(cards, { type: "add", card: { id: "g" + (++_id), state: "fresh" } });
+  }
+  assert.equal(cards.length, 3, "loop must fill exactly to queueTarget");
+
+  // Skipping any card must reopen the predicate.
+  cards = cardsReducer(cards, { type: "remove", id: "g2" });
+  assert.equal(shouldRefill({ ...base, cards }), true,
+    "after skip, predicate must permit another refill cycle");
 });
 
 test("renderRuby: consecutive plain chars collapse into one segment", () => {
